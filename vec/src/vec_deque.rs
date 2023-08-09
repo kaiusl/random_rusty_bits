@@ -81,25 +81,41 @@ impl<T> VecDeque2<T> {
         self.len == 0
     }
 
+    // right and left counts assuming that self is wrapped around
+    fn right_left_counts(&self) -> (usize, usize) {
+        debug_assert!(self.is_wrapped());
+        // [left]  [empty]  [right] [after buf]
+        // ^- 0             ^- head ^- cap
+        //      ^- left_count-1   ^- head+right_count-1
+        let right_count = self.cap - self.head;
+        let left_count = self.len - right_count;
+        (right_count, left_count)
+    }
+
+    fn is_wrapped(&self) -> bool {
+        self.head + self.len > self.cap
+    }
+
     pub fn as_slices(&self) -> (&[T], &[T]) {
         if self.cap == 0 {
             // self.buf is dangling as we haven't initialized it
             return (&[], &[]);
         }
-        if self.head + self.len > self.cap {
-            let count = self.cap - self.head;
-            let left = self.len - count;
+        if self.is_wrapped() {
+            // [left]  [empty]  [right]
+            // ^- 0             ^- head
+            //      ^- left_count-1   ^- head+right_count-1
+            let (right_count, left_count) = self.right_left_counts();
 
-            let a = unsafe {
-                slice::from_raw_parts(self.buf.as_ptr().add(self.head).cast_const(), count)
-            };
-            let b = unsafe { slice::from_raw_parts(self.buf.as_ptr(), left) };
-            (a, b)
+            let right_start = unsafe { self.buf.as_ptr().add(self.head).cast_const() };
+            let right = unsafe { slice::from_raw_parts(right_start, right_count) };
+            let left = unsafe { slice::from_raw_parts(self.buf.as_ptr(), left_count) };
+            (right, left)
         } else {
-            let a = unsafe {
+            let right = unsafe {
                 slice::from_raw_parts(self.buf.as_ptr().add(self.head).cast_const(), self.len)
             };
-            (a, &[])
+            (right, &[])
         }
     }
 
@@ -121,13 +137,31 @@ impl<T> VecDeque2<T> {
             alloc::handle_alloc_error(layout)
         } else {
             let buf = buf.cast::<T>();
-            if self.head + self.len > self.cap {
-                // tail wraps around
-                let count = self.cap - self.head;
-                unsafe { ptr::copy_nonoverlapping(self.buf.as_ptr().add(self.head), buf, count) };
-                let left = self.len - count;
-                unsafe { ptr::copy_nonoverlapping(self.buf.as_ptr(), buf.add(count), left) };
+            if self.is_wrapped() {
+                let (right_count, left_count) = self.right_left_counts();
+                // [left]  [empty]  [right]
+                // ^- 0             ^- head
+                //      ^- left_count-1   ^- head+right_count-1
+                //
+                // Result:
+                //  [right]  [left]  [empty]
+                //  ^- 0     ^- right_count
+                //                ^- right_count+left_count-1
+                unsafe {
+                    ptr::copy_nonoverlapping(self.buf.as_ptr().add(self.head), buf, right_count)
+                };
+                unsafe {
+                    ptr::copy_nonoverlapping(self.buf.as_ptr(), buf.add(right_count), left_count)
+                };
             } else if self.len != 0 {
+                // [empty] [filled] [empty]
+                //         ^- head
+                //                ^- head+len-1
+                //
+                // Result:
+                //   [filled] [empty]
+                //   ^- head=0
+                //          ^- len-1
                 unsafe { ptr::copy_nonoverlapping(self.buf.as_ptr().add(self.head), buf, self.len) }
             }
 
@@ -162,7 +196,7 @@ impl<T> VecDeque2<T> {
             self.grow()
         }
 
-        assert!(self.len < self.cap);
+        debug_assert!(self.len < self.cap);
         let index = (self.head + self.len) % self.cap;
 
         let ptr = unsafe { self.buf.as_ptr().add(index) };
@@ -170,15 +204,12 @@ impl<T> VecDeque2<T> {
         self.len += 1;
     }
 
-    pub fn push_front(&mut self, val: T)
-    where
-        T: fmt::Debug,
-    {
+    pub fn push_front(&mut self, val: T) {
         if self.len == self.cap {
             self.grow()
         }
 
-        assert!(self.len < self.cap);
+        debug_assert!(self.len < self.cap);
         let index = if self.head == 0 {
             self.cap - 1
         } else {
@@ -208,8 +239,25 @@ impl<T> VecDeque2<T> {
         Some(val)
     }
 
+    /// Index of last item. Assumes that self is not empty.
+    ///
+    /// If self is empty, this function returns an meaningless number or panics.
+    #[inline]
     fn tail_index(&mut self) -> usize {
-        (self.head + self.len - 1) % self.cap
+        self.get_real_index(self.len - 1)
+    }
+
+    /// The actual index of an index'th element. Assumes that self is not empty
+    /// and that the index is in bounds.
+    ///
+    /// If self is empty, the returned value has no real meaning and is the index
+    /// is out of bounds it will wrap around the buffer potentially resulting in
+    /// a index to random element or even to uninitialized element.
+    #[inline]
+    fn get_real_index(&self, index: usize) -> usize {
+        debug_assert!(!self.is_empty());
+        debug_assert!(self.is_in_bounds(index));
+        (self.head + index) % self.cap
     }
 
     pub fn pop_back(&mut self) -> Option<T> {
@@ -229,8 +277,7 @@ impl<T> VecDeque2<T> {
             return None;
         }
 
-        let index = (self.head + index) % self.cap;
-
+        let index = self.get_real_index(index);
         let ptr = unsafe { self.buf.as_ptr().add(index) };
         unsafe { Some(&*ptr) }
     }
