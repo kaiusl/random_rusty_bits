@@ -1,0 +1,4 @@
+[workspace]
+
+members = ["vec", "sort", "search", "linked_list"]
+resolver = "2"
