@@ -4,7 +4,7 @@
 
 extern crate alloc as crate_alloc;
 
-use core::alloc::Layout;
+use core::alloc::{Layout, LayoutError};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::{fmt, mem, ptr, slice};
@@ -52,8 +52,7 @@ impl<T> Drop for Vec2<T> {
             }
         }
 
-        let layout = Layout::array::<T>(self.cap).unwrap();
-        unsafe { alloc::dealloc(self.buf.as_ptr().cast::<u8>(), layout) };
+        unsafe { alloc::dealloc(self.buf.as_ptr().cast::<u8>(), self.current_layout()) };
     }
 }
 
@@ -96,18 +95,27 @@ impl<T> Vec2<T> {
         unsafe { slice::from_raw_parts(self.buf.as_ptr().cast_const(), self.len) }
     }
 
+    #[inline]
+    fn current_layout(&self) -> Layout {
+        // This cannot return Err variant as we have already checked it
+        Layout::array::<T>(self.cap).unwrap()
+    }
+
     fn grow_to(&mut self, new_cap: usize) {
+        if new_cap <= self.cap {
+            return;
+        }
+
         let (buf, layout) = if self.cap == 0 {
             let layout = Layout::array::<T>(new_cap).unwrap();
             let buf = unsafe { alloc::alloc(layout) };
             (buf, layout)
         } else {
-            let old_layout = Layout::array::<T>(self.cap).unwrap();
             let new_layout = Layout::array::<T>(new_cap).unwrap();
             let buf = unsafe {
                 alloc::realloc(
                     self.buf.as_ptr().cast::<u8>(),
-                    old_layout,
+                    self.current_layout(),
                     new_layout.size(),
                 )
             };
@@ -118,8 +126,7 @@ impl<T> Vec2<T> {
             alloc::handle_alloc_error(layout)
         } else {
             // SAFETY: we just checked that buf is not null.
-            let buf = unsafe { NonNull::new_unchecked(buf.cast::<T>()) };
-            self.buf = buf;
+            self.buf = unsafe { NonNull::new_unchecked(buf.cast::<T>()) };
             self.cap = new_cap;
         }
     }
@@ -128,7 +135,7 @@ impl<T> Vec2<T> {
         let new_cap = if self.cap == 0 {
             Self::INITIAL_CAP
         } else {
-            // Cannot owerflow because Layout::array constraints the total
+            // Cannot overflow because Layout::array constraints the total
             // number of bytes allocated to be less than isize::MAX.
             // Thus at most self.cap == isize::MAX and isize::MAX * 2 == usize::MAX - 1
             self.cap * 2
