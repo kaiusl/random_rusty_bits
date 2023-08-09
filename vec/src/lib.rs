@@ -6,20 +6,20 @@ extern crate alloc as crate_alloc;
 
 use core::alloc::Layout;
 use core::marker::PhantomData;
+use core::ptr::NonNull;
 use core::{fmt, mem, ptr, slice};
 use crate_alloc::alloc;
 
 struct Vec2<T> {
     // TODO: use NonNull for covariant T so Vec2<&'static T> could be used for Vec2<&'a T>, *mut T makes Vec2<T> invariant
-    buf: *mut T,
+    buf: NonNull<T>,
     len: usize,
     cap: usize,
     marker: PhantomData<T>,
 }
 
 fn covariant<'a, T>(a: Vec2<&'static T>) -> Vec2<&'a T> {
-    // a
-    todo!()
+    a
 }
 
 impl<T> fmt::Debug for Vec2<T>
@@ -37,7 +37,7 @@ where
 
 impl<T> Drop for Vec2<T> {
     fn drop(&mut self) {
-        if self.buf.is_null() {
+        if self.cap == 0 {
             return;
         }
 
@@ -47,13 +47,13 @@ impl<T> Drop for Vec2<T> {
         // TODO: add drop guard in case T::drop panics
         for i in 0..len {
             unsafe {
-                let ptr = self.buf.add(i);
+                let ptr = self.buf.as_ptr().add(i);
                 ptr::drop_in_place(ptr);
             }
         }
 
         let layout = Layout::array::<T>(self.cap).unwrap();
-        unsafe { alloc::dealloc(self.buf.cast::<u8>(), layout) };
+        unsafe { alloc::dealloc(self.buf.as_ptr().cast::<u8>(), layout) };
     }
 }
 
@@ -66,7 +66,8 @@ impl<T> Vec2<T> {
     pub fn new() -> Self {
         assert!(mem::size_of::<T>() != 0, "we don't (yet) support ZST");
         Self {
-            buf: ptr::null_mut(),
+            // SAFETY: self.buf is never touched before actually initializing it
+            buf: NonNull::dangling(),
             len: 0,
             cap: 0,
             marker: PhantomData,
@@ -88,7 +89,11 @@ impl<T> Vec2<T> {
     }
 
     pub fn as_slice(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.buf.cast_const(), self.len) }
+        if self.cap == 0 {
+            // self.buf is dangling as we haven't initialized it
+            return &[];
+        }
+        unsafe { slice::from_raw_parts(self.buf.as_ptr().cast_const(), self.len) }
     }
 
     fn grow_to(&mut self, new_cap: usize) {
@@ -99,18 +104,24 @@ impl<T> Vec2<T> {
         } else {
             let old_layout = Layout::array::<T>(self.cap).unwrap();
             let new_layout = Layout::array::<T>(new_cap).unwrap();
-            let buf =
-                unsafe { alloc::realloc(self.buf.cast::<u8>(), old_layout, new_layout.size()) };
+            let buf = unsafe {
+                alloc::realloc(
+                    self.buf.as_ptr().cast::<u8>(),
+                    old_layout,
+                    new_layout.size(),
+                )
+            };
             (buf, new_layout)
         };
 
         if buf.is_null() {
             alloc::handle_alloc_error(layout)
+        } else {
+            // SAFETY: we just checked that buf is not null.
+            let buf = unsafe { NonNull::new_unchecked(buf.cast::<T>()) };
+            self.buf = buf;
+            self.cap = new_cap;
         }
-
-        let buf = buf.cast::<T>();
-        self.buf = buf;
-        self.cap = new_cap;
     }
 
     fn grow(&mut self) {
@@ -131,7 +142,7 @@ impl<T> Vec2<T> {
         }
 
         assert!(self.len < self.cap);
-        let ptr = unsafe { self.buf.add(self.len) };
+        let ptr = unsafe { self.buf.as_ptr().add(self.len) };
         unsafe { ptr.write(val) };
         self.len += 1;
     }
@@ -142,7 +153,7 @@ impl<T> Vec2<T> {
         }
 
         self.len -= 1; // Want to read at last index, so decrement before reading
-        let ptr = unsafe { self.buf.add(self.len) };
+        let ptr = unsafe { self.buf.as_ptr().add(self.len) };
         let val = unsafe { ptr.read() };
         Some(val)
     }
@@ -152,7 +163,7 @@ impl<T> Vec2<T> {
             return None;
         }
 
-        let ptr = unsafe { self.buf.add(index) };
+        let ptr = unsafe { self.buf.as_ptr().add(index) };
         unsafe { Some(&*ptr) }
     }
 
@@ -166,7 +177,7 @@ impl<T> Vec2<T> {
             return None;
         }
 
-        let ptr = unsafe { self.buf.add(index) };
+        let ptr = unsafe { self.buf.as_ptr().add(index) };
         let val = unsafe { ptr.read() };
 
         unsafe {
@@ -200,7 +211,7 @@ impl<T> Vec2<T> {
 
             // [head] [tail]   [after]
             //        ^-index  ^-self.len
-            let tail_start = self.buf.add(index);
+            let tail_start = self.buf.as_ptr().add(index);
             let count = self.len - index;
             ptr::copy(tail_start, tail_start.add(1), count)
             // [head] [empty]  [tail] [after]
@@ -209,7 +220,7 @@ impl<T> Vec2<T> {
 
         unsafe {
             // write new value to buf[index]
-            let ptr = self.buf.add(index);
+            let ptr = self.buf.as_ptr().add(index);
             ptr.write(val);
         }
 
