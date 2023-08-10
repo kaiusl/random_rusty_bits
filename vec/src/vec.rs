@@ -7,7 +7,6 @@ use core::{fmt, mem, ptr, slice};
 use crate_alloc::alloc;
 
 struct Vec2<T> {
-    // TODO: use NonNull for covariant T so Vec2<&'static T> could be used for Vec2<&'a T>, *mut T makes Vec2<T> invariant
     buf: NonNull<T>,
     len: usize,
     cap: usize,

@@ -38,6 +38,7 @@ impl<T> Drop for VecDeque2<T> {
             return;
         }
 
+        // TODO: add drop guard in case T::drop panics
         while self.pop_back().is_some() {}
 
         let old_layout = self.current_layout();
