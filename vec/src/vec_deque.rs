@@ -38,15 +38,32 @@ impl<T> Drop for VecDeque2<T> {
             return;
         }
 
-        // TODO: add drop guard in case T::drop panics
-        while self.pop_back().is_some() {}
+        /// Drop guard in case T::drop panics.
+        ///
+        /// In the case on unwinding we try to drop the remaining items.
+        /// If that succeeds we deallocate our buffer and the caller could catch the unwinding,
+        /// if not we abort due to double panic.
+        struct Guard<'a, U>(&'a mut VecDeque2<U>);
 
-        let old_layout = self.current_layout();
-        let old_buf = mem::replace(&mut self.buf, NonNull::dangling());
-        self.cap = 0;
-        self.head = 0;
+        impl<'a, U> Drop for Guard<'a, U> {
+            fn drop(&mut self) {
+                while self.0.pop_back().is_some() {}
 
-        unsafe { alloc::dealloc(old_buf.as_ptr().cast::<u8>(), old_layout) };
+                assert_eq!(self.0.len, 0);
+
+                let layout = self.0.current_layout();
+                self.0.cap = 0;
+                self.0.head = 0;
+                let buf = mem::replace(&mut self.0.buf, NonNull::dangling())
+                    .as_ptr()
+                    .cast::<u8>();
+
+                unsafe { alloc::dealloc(buf, layout) };
+            }
+        }
+
+        let g = Guard(self);
+        while g.0.pop_back().is_some() {}
     }
 }
 
@@ -348,6 +365,10 @@ impl<T> VecDeque2<T> {
 
 #[cfg(test)]
 mod tests {
+    use core::panic::AssertUnwindSafe;
+    use core::sync::atomic::AtomicUsize;
+    use std::panic::catch_unwind;
+
     use super::*;
 
     #[test]
@@ -420,21 +441,51 @@ mod tests {
         assert_eq!(v.get(7), None);
     }
 
-    // #[test]
-    // fn it_works2() {
-    //     let mut v = Vec2::new();
-    //     v.push(String::from("2"));
-    //     println!("{:?}", v);
-    //     v.push(String::from("3"));
-    //     println!("{:?}", v);
-    //     v.push(String::from("4"));
-    //     println!("{:?}", v);
+    #[test]
+    fn panic_in_drop() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+        struct D(bool, String);
 
-    //     v.pop();
-    //     println!("{:?}", v);
-    //     v.pop();
-    //     println!("{:?}", v);
-    //     //v.pop();
-    //     println!("{:?}", v);
-    // }
+        impl Drop for D {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+                if self.0 {
+                    panic!("panic from drop")
+                }
+            }
+        }
+
+        let mut v = VecDeque2::new();
+        v.push_back(D(false, String::from("a")));
+        v.push_back(D(true, String::from("b")));
+        v.push_back(D(false, String::from("c")));
+
+        catch_unwind(AssertUnwindSafe(|| drop(v))).ok();
+        assert_eq!(DROP_COUNT.load(core::sync::atomic::Ordering::SeqCst), 3)
+    }
+
+    #[test]
+    #[ignore = "should abort, needs to be manually checked"]
+    fn panic_in_drop_abort() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+        struct D(bool, String);
+
+        impl Drop for D {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+                if self.0 {
+                    panic!("panic from drop")
+                }
+            }
+        }
+
+        let mut v = VecDeque2::new();
+        v.push_back(D(false, String::from("a")));
+        v.push_back(D(true, String::from("b")));
+        v.push_back(D(false, String::from("c")));
+        v.push_back(D(true, String::from("d")));
+
+        catch_unwind(AssertUnwindSafe(|| drop(v))).ok();
+        assert_eq!(DROP_COUNT.load(core::sync::atomic::Ordering::SeqCst), 3)
+    }
 }
