@@ -56,18 +56,39 @@ where
 
 impl<T> Drop for LinkedList<T> {
     fn drop(&mut self) {
-        if let Some(HeadTail { head, .. }) = self.head_tail.as_mut() {
-            let mut current = *head;
+        /// Guard in case `T::drop` panics.
+        /// 
+        /// We try to clean up as much as possible after the panic, eg try to 
+        /// drop the remaining items.
+        struct Guard<U>(Option<NonNull<Node<U>>>);
 
-            loop {
-                let c = unsafe { Box::from_raw(current.as_ptr()) };
-                let Node { next, .. } = *c;
-                match next {
-                    Some(next) => current = next,
-                    None => break,
+        impl<U> Guard<U> {
+            fn drop_items(&mut self) {
+                // Take self.0 so we cannot try to drop the same U again.
+                while let Some(current) = self.0.take() {
+                    // shadow current so it cannot be used again as it's not valid to be used again
+                    let mut current = unsafe { Box::from_raw(current.as_ptr()) };
+                    // data needs to be dropped after self.0 = next
+                    // because this way we can try to drop the remaining items 
+                    // after U::drop panics and clean up as much as possible.
+                    // 
+                    // Otherwise since we self.0.take() we would leak all 
+                    // remaining items after the panic as self.0 is None.
+                    self.0 = current.next.take();
+                    drop(current);
                 }
             }
         }
+
+        impl<U> Drop for Guard<U> {
+            fn drop(&mut self) {
+                self.drop_items()
+            }
+        }
+
+        self.count = 0;
+        let mut guard = Guard(self.head_tail.take().map(|a| a.head));
+        guard.drop_items()
     }
 }
 
