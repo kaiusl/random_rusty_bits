@@ -1,11 +1,18 @@
 use core::marker::PhantomData;
+use core::ptr::NonNull;
 use core::{fmt, ptr};
 
 struct LinkedList<T> {
-    head: *mut Node<T>,
-    tail: *mut Node<T>,
+    // Head and tail can only be None both at once (when count == 0).
+    // If count == 1 both point to the same item.
+    head_tail: Option<HeadTail<T>>,
     count: usize,
     marker: PhantomData<T>,
+}
+
+struct HeadTail<T> {
+    head: NonNull<Node<T>>,
+    tail: NonNull<Node<T>>,
 }
 
 impl<T> fmt::Debug for LinkedList<T>
@@ -15,13 +22,18 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LinkedList")
             .field("count", &self.count)
-            .field("items", &DebugNodes { node: self.head })
+            .field(
+                "items",
+                &DebugNodes {
+                    node: self.head_ptr(),
+                },
+            )
             .finish()
     }
 }
 
 struct DebugNodes<T> {
-    node: *mut Node<T>,
+    node: Option<NonNull<Node<T>>>,
 }
 
 impl<T> fmt::Debug for DebugNodes<T>
@@ -31,11 +43,11 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut fmt = f.debug_list();
 
-        let mut current = self.node;
-        while !current.is_null() {
-            let data = unsafe { &(*current).data };
+        let mut maybe_current = self.node;
+        while let Some(current) = maybe_current {
+            let data = unsafe { &(*current.as_ptr()).data };
             fmt.entry(data);
-            current = unsafe { (*current).next };
+            maybe_current = unsafe { (*current.as_ptr()).next };
         }
 
         fmt.finish()
@@ -44,28 +56,31 @@ where
 
 impl<T> Drop for LinkedList<T> {
     fn drop(&mut self) {
-        let mut current = self.head;
-        self.head = ptr::null_mut();
-        self.tail = ptr::null_mut();
-        while !current.is_null() {
-            let c = unsafe { Box::from_raw(current) };
-            let Node { next, .. } = *c;
-            current = next;
+        if let Some(HeadTail { head, .. }) = self.head_tail.as_mut() {
+            let mut current = *head;
+
+            loop {
+                let c = unsafe { Box::from_raw(current.as_ptr()) };
+                let Node { next, .. } = *c;
+                match next {
+                    Some(next) => current = next,
+                    None => break,
+                }
+            }
         }
     }
 }
 
 struct Node<T> {
     data: T,
-    next: *mut Node<T>,
-    prev: *mut Node<T>,
+    next: Option<NonNull<Node<T>>>,
+    prev: Option<NonNull<Node<T>>>,
 }
 
 impl<T> LinkedList<T> {
     pub fn new() -> Self {
         Self {
-            head: ptr::null_mut(),
-            tail: ptr::null_mut(),
+            head_tail: None,
             count: 0,
             marker: PhantomData,
         }
@@ -75,21 +90,42 @@ impl<T> LinkedList<T> {
         self.count
     }
 
+    fn tail_ptr(&self) -> Option<NonNull<Node<T>>> {
+        self.head_tail.as_ref().map(|a| a.tail)
+    }
+
+    fn head_ptr(&self) -> Option<NonNull<Node<T>>> {
+        self.head_tail.as_ref().map(|a| a.head)
+    }
+
+    fn set_tail(&mut self, tail: NonNull<Node<T>>) {
+        self.head_tail.as_mut().unwrap().tail = tail;
+    }
+
+    fn set_head(&mut self, head: NonNull<Node<T>>) {
+        self.head_tail.as_mut().unwrap().head = head
+    }
+
     pub fn push_back(&mut self, val: T) {
         let new = Node {
             data: val,
-            next: ptr::null_mut(),
-            prev: self.tail,
+            next: None,
+            prev: self.tail_ptr(),
         };
 
-        let new = Box::into_raw(Box::new(new));
-        if self.count == 0 {
-            self.head = new;
-            self.tail = new;
-        } else {
-            debug_assert!(!self.tail.is_null());
-            unsafe { (*self.tail).next = new };
-            self.tail = new;
+        let new = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new))) };
+        match &mut self.head_tail {
+            Some(HeadTail { tail, .. }) => {
+                unsafe { (*tail.as_ptr()).next = Some(new) };
+                *tail = new;
+            }
+            None => {
+                debug_assert_eq!(self.count, 0);
+                self.head_tail = Some(HeadTail {
+                    head: new,
+                    tail: new,
+                });
+            }
         }
 
         self.count += 1;
@@ -98,18 +134,22 @@ impl<T> LinkedList<T> {
     pub fn push_front(&mut self, val: T) {
         let new = Node {
             data: val,
-            next: self.head,
-            prev: ptr::null_mut(),
+            next: self.head_ptr(),
+            prev: None,
         };
-        let new = Box::into_raw(Box::new(new));
-
-        if self.count == 0 {
-            self.head = new;
-            self.tail = new;
-        } else {
-            debug_assert!(!self.head.is_null());
-            unsafe { (*self.head).prev = new };
-            self.head = new;
+        let new = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new))) };
+        match &mut self.head_tail {
+            Some(HeadTail { head, .. }) => {
+                unsafe { (*head.as_ptr()).prev = Some(new) };
+                *head = new;
+            }
+            None => {
+                debug_assert_eq!(self.count, 0);
+                self.head_tail = Some(HeadTail {
+                    head: new,
+                    tail: new,
+                });
+            }
         }
 
         self.count += 1;
@@ -120,154 +160,122 @@ impl<T> LinkedList<T> {
             0 => self.push_front(val),
             i if i == self.count => self.push_back(val),
             _ => {
-                let Some(current) = self.get_raw_mut(index) else {
+                let Some(current) = self.get_raw(index) else {
                     panic!()
                 };
-                let prev = unsafe { (*current).prev };
+                let prev = unsafe { (*current.as_ptr()).prev.unwrap() };
 
                 let new = Node {
                     data: val,
-                    next: current,
-                    prev,
+                    next: Some(current),
+                    prev: Some(prev),
                 };
-                let new = Box::into_raw(Box::new(new));
+                let new = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new))) };
 
-                unsafe { (*current).prev = new };
-
-                if !prev.is_null() {
-                    unsafe { (*prev).next = new }
-                }
+                unsafe { (*current.as_ptr()).prev = Some(new) };
+                unsafe { (*prev.as_ptr()).next = Some(new) }
 
                 self.count += 1;
             }
         }
     }
 
-    unsafe fn remove_raw(&mut self, val: *mut Node<T>) -> T {
-        assert!(!val.is_null());
-
-        let val = unsafe { Box::from_raw(val) };
+    unsafe fn remove_raw(&mut self, val: NonNull<Node<T>>) -> T {
+        let val = unsafe { Box::from_raw(val.as_ptr()) };
         let Node { data, next, prev } = *val;
-
-        if !next.is_null() {
-            unsafe { (*next).prev = prev }
-        } else {
-            // val was tail
-            self.tail = prev;
-        }
-
-        if !prev.is_null() {
-            unsafe { (*prev).next = next }
-        } else {
-            // val was head
-            self.head = next;
-        }
-        self.count -= 1;
-
-        if cfg!(debug_assertions) {
-            unsafe {
-                if !self.head.is_null() {
-                    assert!((*self.head).prev.is_null())
+        match (prev, next) {
+            (None, None) => {
+                // only item
+                debug_assert_eq!(self.count, 1);
+                self.head_tail = None;
+            }
+            (Some(prev), Some(next)) => {
+                // middle
+                unsafe {
+                    (*prev.as_ptr()).next = Some(next);
+                    (*next.as_ptr()).prev = Some(prev);
                 }
-
-                if !self.tail.is_null() {
-                    assert!((*self.tail).next.is_null())
-                }
-
-                if self.count == 0 {
-                    assert!(self.tail.is_null());
-                    assert!(self.head.is_null());
-                }
+            }
+            (Some(prev), None) => {
+                // tail
+                unsafe { (*prev.as_ptr()).next = None };
+                self.set_tail(prev);
+            }
+            (None, Some(next)) => {
+                // head
+                unsafe { (*next.as_ptr()).prev = None };
+                self.set_head(next);
             }
         }
 
+        self.count -= 1;
         data
     }
 
     pub fn remove(&mut self, i: usize) -> Option<T> {
-        self.get_raw_mut(i)
-            .map(|node| unsafe { self.remove_raw(node) })
+        self.get_raw(i).map(|node| unsafe { self.remove_raw(node) })
     }
 
     pub fn pop_back(&mut self) -> Option<T> {
-        if self.tail.is_null() {
-            None
-        } else {
-            Some(unsafe { self.remove_raw(self.tail) })
+        match self.head_tail.as_mut() {
+            Some(HeadTail { tail, .. }) => {
+                let tail = *tail;
+                Some(unsafe { self.remove_raw(tail) })
+            }
+            None => None,
         }
     }
 
     pub fn pop_front(&mut self) -> Option<T> {
-        if self.head.is_null() {
-            None
-        } else {
-            Some(unsafe { self.remove_raw(self.head) })
+        match self.head_tail.as_mut() {
+            Some(HeadTail { head, .. }) => {
+                let head = *head;
+                Some(unsafe { self.remove_raw(head) })
+            }
+            None => None,
         }
     }
 
     pub fn get(&self, i: usize) -> Option<&T> {
-        self.get_raw(i).map(|a| unsafe { &(*a).data })
+        self.get_raw(i).map(|a| unsafe { &(*a.as_ptr()).data })
     }
 
     pub fn get_mut(&mut self, i: usize) -> Option<&mut T> {
-        self.get_raw_mut(i).map(|a| unsafe { &mut (*a).data })
+        self.get_raw(i).map(|a| unsafe { &mut (*a.as_ptr()).data })
     }
 
     pub fn front(&self) -> Option<&T> {
-        if self.head.is_null() {
-            None
-        } else {
-            unsafe { Some(&(*self.head).data) }
-        }
+        self.head_tail
+            .as_ref()
+            .map(|ht| unsafe { &(*ht.head.as_ptr()).data })
     }
 
     pub fn front_mut(&mut self) -> Option<&mut T> {
-        if self.head.is_null() {
-            None
-        } else {
-            unsafe { Some(&mut (*self.head).data) }
-        }
+        self.head_tail
+            .as_ref()
+            .map(|ht| unsafe { &mut (*ht.head.as_ptr()).data })
     }
 
     pub fn back(&self) -> Option<&T> {
-        if self.tail.is_null() {
-            None
-        } else {
-            unsafe { Some(&(*self.tail).data) }
-        }
+        self.head_tail
+            .as_ref()
+            .map(|ht| unsafe { &(*ht.tail.as_ptr()).data })
     }
 
     pub fn back_mut(&mut self) -> Option<&mut T> {
-        if self.tail.is_null() {
-            None
-        } else {
-            unsafe { Some(&mut (*self.tail).data) }
-        }
+        self.head_tail
+            .as_ref()
+            .map(|ht| unsafe { &mut (*ht.tail.as_ptr()).data })
     }
 
-    fn get_raw_mut(&mut self, index: usize) -> Option<*mut Node<T>> {
+    fn get_raw(&self, index: usize) -> Option<NonNull<Node<T>>> {
         if index >= self.count {
             return None;
         }
 
-        let mut current = self.head;
+        let mut current = self.head_ptr().unwrap();
         for _ in 0..index {
-            assert!(!current.is_null());
-            current = unsafe { (*current).next };
-        }
-
-        Some(current)
-    }
-
-    fn get_raw(&self, index: usize) -> Option<*const Node<T>> {
-        if index >= self.count {
-            return None;
-        }
-
-        let mut current = self.head;
-        for _ in 0..index {
-            assert!(!current.is_null());
-            current = unsafe { (*current).next };
+            current = unsafe { (*current.as_ptr()).next.unwrap() };
         }
 
         Some(current)
