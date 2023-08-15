@@ -2,6 +2,8 @@ use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::{fmt, ptr};
 
+use self::iter::{Iter, IterMut};
+
 struct LinkedList<T> {
     // Head and tail can only be None both at once (when count == 0).
     // If count == 1 both point to the same item.
@@ -22,12 +24,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LinkedList")
             .field("count", &self.count)
-            .field(
-                "items",
-                &DebugNodes {
-                    node: self.head_ptr(),
-                },
-            )
+            .field("items", &self.iter())
             .finish()
     }
 }
@@ -106,7 +103,7 @@ impl<T> LinkedList<T> {
     //     - valid to dereference, they are never set to `NonNull::dangling` and are aligned
     //       since they are created from a real `Box`
     //     - stable, we never move any of the allocated nodes
-    //     - alive for the lifetime of self as they are deallocated only in Self::drop 
+    //     - alive for the lifetime of self as they are deallocated only in Self::drop
 
     pub fn new() -> Self {
         Self {
@@ -305,7 +302,7 @@ impl<T> LinkedList<T> {
     }
 
     pub fn get(&self, i: usize) -> Option<&T> {
-        // SAFETY: 
+        // SAFETY:
         //  * returned reference is bound to the borrow of self
         //    since we own the data, it must be alive
         //  * all node pointers are valid to deref (see safety doc on top of this impl block)
@@ -313,7 +310,7 @@ impl<T> LinkedList<T> {
     }
 
     pub fn get_mut(&mut self, i: usize) -> Option<&mut T> {
-        // SAFETY: 
+        // SAFETY:
         //  * returned reference is bound to the borrow of self
         //    since we own the data, it must be alive
         //  * Any previously returned references are invalidated by taking &mut self
@@ -372,11 +369,120 @@ impl<T> LinkedList<T> {
 
         Some(current)
     }
+
+    fn iter(&self) -> Iter<'_, T> {
+        Iter::new(self)
+    }
+
+    fn iter_mut(&mut self) -> IterMut<'_, T> {
+        IterMut::new(self)
+    }
 }
 
 fn non_null_from_box<T>(val: Box<T>) -> NonNull<T> {
     // SAFETY: Box::into_raw returns properly aligned and non-null pointer
     unsafe { NonNull::new_unchecked(Box::into_raw(val)) }
+}
+
+mod iter {
+    use super::*;
+
+    pub struct Iter<'a, T> {
+        node: Option<NonNull<Node<T>>>,
+        marker: PhantomData<&'a T>,
+    }
+
+    impl<'a, T> Iter<'a, T> {
+        pub(super) fn new(list: &'a LinkedList<T>) -> Self {
+            // SAFETY:
+            //  * the returned item's lifetime is bound to the borrow of list,
+            //   as the list owns the items they must remain live for 'a
+            //  * invariants of `LinkedList` hold here too, see the comment on top of LinkedList impl block
+            Self {
+                node: list.head_ptr(),
+                marker: PhantomData,
+            }
+        }
+    }
+
+    impl<'a, T> Iterator for Iter<'a, T> {
+        type Item = &'a T;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self.node {
+                Some(ptr) => {
+                    // SAFETY:
+                    //  * all node pointer are valid to dereference because they are from `LinkedList`
+                    //   (see the safety comment of top of `impl LinkedList` block)
+                    let data = unsafe { &(*ptr.as_ptr()).data };
+                    self.node = unsafe { (*ptr.as_ptr()).next };
+
+                    Some(data)
+                }
+                None => None,
+            }
+        }
+    }
+
+    impl<T> Clone for Iter<'_, T> {
+        fn clone(&self) -> Self {
+            Self {
+                node: self.node,
+                marker: self.marker,
+            }
+        }
+    }
+
+    impl<T> fmt::Debug for Iter<'_, T>
+    where
+        T: fmt::Debug,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_list().entries(self.clone()).finish()
+        }
+    }
+
+    pub struct IterMut<'a, T> {
+        node: Option<NonNull<Node<T>>>,
+        marker: PhantomData<&'a mut T>,
+    }
+
+    impl<'a, T> IterMut<'a, T> {
+        pub(super) fn new(list: &'a mut LinkedList<T>) -> Self {
+            // SAFETY:
+            //  * the returned item's lifetime is bound to the borrow of list,
+            //   as the list owns the items they must remain live for 'a
+            //  * invariants of `LinkedList` hold here too, see the comment on top of LinkedList impl block
+            //  * taking `LinkedList` by &mut will invalidate all previously returned
+            //    references by the list since they are all bound to borrow of list
+            Self {
+                node: list.head_ptr(),
+                marker: PhantomData,
+            }
+        }
+    }
+
+    impl<'a, T> Iterator for IterMut<'a, T> {
+        type Item = &'a mut T;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self.node {
+                Some(ptr) => {
+                    // SAFETY:
+                    //  * all node pointer are valid to dereference because they are from `LinkedList`
+                    //   (see the safety comment of top of `impl LinkedList` block)
+                    //  * all nodes in `LinkedList` point to different nodes,
+                    //    thus we cannot return multiple unique references to same data
+                    let ptr = ptr.as_ptr();
+                    let data = unsafe { &mut (*ptr).data };
+                    self.node = unsafe { (*ptr).next };
+
+                    Some(data)
+                }
+                None => None,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -427,6 +533,23 @@ mod tests {
 
         //let result = add(2, 2);
         // assert_eq!(result, 4);
+    }
+
+    #[test]
+    fn iters() {
+        let mut ll = LinkedList::new();
+
+        ll.push_back(5);
+        ll.push_back(6);
+        ll.push_front(8);
+        ll.insert(0, 11).unwrap();
+        ll.push_front(9);
+
+        let vals: Vec<_> = ll.iter().collect();
+        assert_eq!(vals, [&9, &11, &8, &5, &6]);
+
+        let vals: Vec<_> = ll.iter_mut().collect();
+        assert_eq!(vals, [&9, &11, &8, &5, &6]);
     }
 
     #[test]
