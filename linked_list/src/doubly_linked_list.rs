@@ -127,12 +127,18 @@ impl<T> LinkedList<T> {
 
     /// Set tail pointer. Assumes that self.head_tail is Some
     fn set_tail(&mut self, tail: NonNull<Node<T>>) {
-        self.head_tail.as_mut().unwrap().tail = tail;
+        self.head_tail
+            .as_mut()
+            .expect("`LinkedList::set_tail` expects `self.head_tail` to be `Some(..)` variant")
+            .tail = tail;
     }
 
     /// Set head pointer. Assumes that self.head_tail is Some
     fn set_head(&mut self, head: NonNull<Node<T>>) {
-        self.head_tail.as_mut().unwrap().head = head
+        self.head_tail
+            .as_mut()
+            .expect("`LinkedList::set_tail` expects `self.head_tail` to be `Some(..)` variant")
+            .head = head
     }
 
     pub fn push_back(&mut self, val: T) {
@@ -276,7 +282,8 @@ impl<T> LinkedList<T> {
 
     pub fn remove(&mut self, i: usize) -> Option<T> {
         // SAFETY: get_node return a valid pointer from our list or None
-        self.get_node(i).map(|node| unsafe { self.remove_node(node) })
+        self.get_node(i)
+            .map(|node| unsafe { self.remove_node(node) })
     }
 
     pub fn pop_back(&mut self) -> Option<T> {
@@ -359,12 +366,20 @@ impl<T> LinkedList<T> {
         }
 
         // Head must be Some if index < self.count (0 < index < 0 cannot be true)
-        let mut current = self.head_ptr().unwrap();
-        for _ in 0..index {
+        let mut current = self
+            .head_ptr()
+            .expect("expected `head` to be `Some(..)` for non-empty list");
+        for i in 0..index {
             // next must be Some since index < self.count and loop will terminate
             // after we set current = tail
             // SAFETY: all node pointers are valid to deref (see safety doc on top of this impl block)
-            current = unsafe { (*current.as_ptr()).next.unwrap() };
+            current = unsafe {
+                (*current.as_ptr())
+                    .next
+                    .unwrap_or_else(|| {
+                        panic!("expected a node at index `{i}` to have a next pointer since there are `{}` items in the list", self.len())
+                    })
+            };
         }
 
         Some(current)
