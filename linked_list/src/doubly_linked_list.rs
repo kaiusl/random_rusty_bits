@@ -198,7 +198,7 @@ impl<T> LinkedList<T> {
             0 => self.push_front(val),
             i if i == self.count => self.push_back(val),
             _ => {
-                let Some(current) = self.get_raw(index) else {
+                let Some(current) = self.get_node(index) else {
                     return Err(val);
                 };
                 // SAFETY:
@@ -235,7 +235,7 @@ impl<T> LinkedList<T> {
     /// # SAFETY
     ///
     /// * `val` must be a valid pointer which is in our list
-    unsafe fn remove_raw(&mut self, val: NonNull<Node<T>>) -> T {
+    unsafe fn remove_node(&mut self, val: NonNull<Node<T>>) -> T {
         // SAFETY: all nodes are constructed from Box::into_raw
         let val = unsafe { Box::from_raw(val.as_ptr()) };
         let Node { data, next, prev } = *val;
@@ -275,8 +275,8 @@ impl<T> LinkedList<T> {
     }
 
     pub fn remove(&mut self, i: usize) -> Option<T> {
-        // SAFETY: get_raw return a valid pointer from our list or None
-        self.get_raw(i).map(|node| unsafe { self.remove_raw(node) })
+        // SAFETY: get_node return a valid pointer from our list or None
+        self.get_node(i).map(|node| unsafe { self.remove_node(node) })
     }
 
     pub fn pop_back(&mut self) -> Option<T> {
@@ -284,7 +284,7 @@ impl<T> LinkedList<T> {
             Some(HeadTail { tail, .. }) => {
                 let tail = *tail;
                 // SAFETY: tail is a valid pointer to deref if self.head_tail is Some
-                Some(unsafe { self.remove_raw(tail) })
+                Some(unsafe { self.remove_node(tail) })
             }
             None => None,
         }
@@ -295,7 +295,7 @@ impl<T> LinkedList<T> {
             Some(HeadTail { head, .. }) => {
                 let head = *head;
                 // SAFETY: head is a valid pointer to deref if self.head_tail is Some
-                Some(unsafe { self.remove_raw(head) })
+                Some(unsafe { self.remove_node(head) })
             }
             None => None,
         }
@@ -306,7 +306,7 @@ impl<T> LinkedList<T> {
         //  * returned reference is bound to the borrow of self
         //    since we own the data, it must be alive
         //  * all node pointers are valid to deref (see safety doc on top of this impl block)
-        self.get_raw(i).map(|a| unsafe { &(*a.as_ptr()).data })
+        self.get_node(i).map(|a| unsafe { &(*a.as_ptr()).data })
     }
 
     pub fn get_mut(&mut self, i: usize) -> Option<&mut T> {
@@ -315,7 +315,7 @@ impl<T> LinkedList<T> {
         //    since we own the data, it must be alive
         //  * Any previously returned references are invalidated by taking &mut self
         //  * all node pointers are valid to deref (see safety doc on top of this impl block)
-        self.get_raw(i).map(|a| unsafe { &mut (*a.as_ptr()).data })
+        self.get_node(i).map(|a| unsafe { &mut (*a.as_ptr()).data })
     }
 
     pub fn front(&self) -> Option<&T> {
@@ -353,7 +353,7 @@ impl<T> LinkedList<T> {
             .map(|ht| unsafe { &mut (*ht.tail.as_ptr()).data })
     }
 
-    fn get_raw(&self, index: usize) -> Option<NonNull<Node<T>>> {
+    fn get_node(&self, index: usize) -> Option<NonNull<Node<T>>> {
         if index >= self.count {
             return None;
         }
