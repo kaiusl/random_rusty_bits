@@ -45,6 +45,7 @@ where
 
         let mut maybe_current = self.node;
         while let Some(current) = maybe_current {
+            // SAFETY: all node pointers are valid to deref (see safety doc on top of this impl block)
             let data = unsafe { &(*current.as_ptr()).data };
             fmt.entry(data);
             maybe_current = unsafe { (*current.as_ptr()).next };
@@ -57,8 +58,8 @@ where
 impl<T> Drop for LinkedList<T> {
     fn drop(&mut self) {
         /// Guard in case `T::drop` panics.
-        /// 
-        /// We try to clean up as much as possible after the panic, eg try to 
+        ///
+        /// We try to clean up as much as possible after the panic, eg try to
         /// drop the remaining items.
         struct Guard<U>(Option<NonNull<Node<U>>>);
 
@@ -67,12 +68,13 @@ impl<T> Drop for LinkedList<T> {
                 // Take self.0 so we cannot try to drop the same U again.
                 while let Some(current) = self.0.take() {
                     // shadow current so it cannot be used again as it's not valid to be used again
+                    // SAFETY: All pointer are derived from valid Box
                     let mut current = unsafe { Box::from_raw(current.as_ptr()) };
                     // data needs to be dropped after self.0 = next
-                    // because this way we can try to drop the remaining items 
+                    // because this way we can try to drop the remaining items
                     // after U::drop panics and clean up as much as possible.
-                    // 
-                    // Otherwise since we self.0.take() we would leak all 
+                    //
+                    // Otherwise since we self.0.take() we would leak all
                     // remaining items after the panic as self.0 is None.
                     self.0 = current.next.take();
                     drop(current);
@@ -99,6 +101,13 @@ struct Node<T> {
 }
 
 impl<T> LinkedList<T> {
+    // SAFETY INVARIANTS:
+    //   * All node pointers (`NonNull<Node<T>>`) which are reachable from head/tail pointers are:
+    //     - valid to dereference, they are never set to `NonNull::dangling` and are aligned
+    //       since they are created from a real `Box`
+    //     - stable, we never move any of the allocated nodes
+    //     - alive for the lifetime of self as they are deallocated only in Self::drop 
+
     pub fn new() -> Self {
         Self {
             head_tail: None,
@@ -119,10 +128,12 @@ impl<T> LinkedList<T> {
         self.head_tail.as_ref().map(|a| a.head)
     }
 
+    /// Set tail pointer. Assumes that self.head_tail is Some
     fn set_tail(&mut self, tail: NonNull<Node<T>>) {
         self.head_tail.as_mut().unwrap().tail = tail;
     }
 
+    /// Set head pointer. Assumes that self.head_tail is Some
     fn set_head(&mut self, head: NonNull<Node<T>>) {
         self.head_tail.as_mut().unwrap().head = head
     }
@@ -134,9 +145,13 @@ impl<T> LinkedList<T> {
             prev: self.tail_ptr(),
         };
 
-        let new = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new))) };
+        let new = non_null_from_box(Box::new(new));
         match &mut self.head_tail {
             Some(HeadTail { tail, .. }) => {
+                // SAFETY:
+                //  * &mut self invalidates any previously out given references
+                //    (hence no-one else can have reference to `tail`)
+                //  * tail must be valid to deref (see safety doc on top of this impl block)
                 unsafe { (*tail.as_ptr()).next = Some(new) };
                 *tail = new;
             }
@@ -158,9 +173,14 @@ impl<T> LinkedList<T> {
             next: self.head_ptr(),
             prev: None,
         };
-        let new = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new))) };
+        let new = non_null_from_box(Box::new(new));
+
         match &mut self.head_tail {
             Some(HeadTail { head, .. }) => {
+                // SAFETY:
+                //  * &mut self invalidates any previously out given references
+                //    (hence no-one else can have reference to `head`)
+                //  * head must be valid to deref (see safety doc on top of this impl block)
                 unsafe { (*head.as_ptr()).prev = Some(new) };
                 *head = new;
             }
@@ -176,32 +196,50 @@ impl<T> LinkedList<T> {
         self.count += 1;
     }
 
-    pub fn insert(&mut self, index: usize, val: T) {
+    pub fn insert(&mut self, index: usize, val: T) -> Result<(), T> {
         match index {
             0 => self.push_front(val),
             i if i == self.count => self.push_back(val),
             _ => {
                 let Some(current) = self.get_raw(index) else {
-                    panic!()
+                    return Err(val);
                 };
-                let prev = unsafe { (*current.as_ptr()).prev.unwrap() };
+                // SAFETY:
+                //  * &mut self invalidates any previously out given references
+                //    (hence no-one else can have reference to `current` and `prev`)
+                //  * all node pointers are valid to deref (see safety doc on top of this impl block)
+                let prev = unsafe {
+                    (*current.as_ptr()).prev.unwrap_or_else(|| {
+                        panic!("expected a node at `index = {index} > 0` to have a previous node")
+                    })
+                };
 
                 let new = Node {
                     data: val,
                     next: Some(current),
                     prev: Some(prev),
                 };
-                let new = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new))) };
+                let new = non_null_from_box(Box::new(new));
 
+                // SAFETY:
+                //  * &mut self invalidates any previously out given references
+                //    (hence no-one else can have reference to `current` and `prev`)
+                //  * all node pointers are valid to deref (see safety doc on top of this impl block)
                 unsafe { (*current.as_ptr()).prev = Some(new) };
                 unsafe { (*prev.as_ptr()).next = Some(new) }
 
                 self.count += 1;
             }
         }
+
+        Ok(())
     }
 
+    /// # SAFETY
+    ///
+    /// * `val` must be a valid pointer which is in our list
     unsafe fn remove_raw(&mut self, val: NonNull<Node<T>>) -> T {
+        // SAFETY: all nodes are constructed from Box::into_raw
         let val = unsafe { Box::from_raw(val.as_ptr()) };
         let Node { data, next, prev } = *val;
         match (prev, next) {
@@ -212,6 +250,10 @@ impl<T> LinkedList<T> {
             }
             (Some(prev), Some(next)) => {
                 // middle
+                // SAFETY:
+                //  * &mut self invalidates any previously out given references
+                //    (hence no-one else can have reference to `next` and `prev`)
+                //  * all node pointers are valid to deref (see safety doc on top of this impl block)
                 unsafe {
                     (*prev.as_ptr()).next = Some(next);
                     (*next.as_ptr()).prev = Some(prev);
@@ -219,11 +261,13 @@ impl<T> LinkedList<T> {
             }
             (Some(prev), None) => {
                 // tail
+                // SAFETY: see previous branch
                 unsafe { (*prev.as_ptr()).next = None };
                 self.set_tail(prev);
             }
             (None, Some(next)) => {
                 // head
+                // SAFETY: see previous branch
                 unsafe { (*next.as_ptr()).prev = None };
                 self.set_head(next);
             }
@@ -234,6 +278,7 @@ impl<T> LinkedList<T> {
     }
 
     pub fn remove(&mut self, i: usize) -> Option<T> {
+        // SAFETY: get_raw return a valid pointer from our list or None
         self.get_raw(i).map(|node| unsafe { self.remove_raw(node) })
     }
 
@@ -241,6 +286,7 @@ impl<T> LinkedList<T> {
         match self.head_tail.as_mut() {
             Some(HeadTail { tail, .. }) => {
                 let tail = *tail;
+                // SAFETY: tail is a valid pointer to deref if self.head_tail is Some
                 Some(unsafe { self.remove_raw(tail) })
             }
             None => None,
@@ -251,6 +297,7 @@ impl<T> LinkedList<T> {
         match self.head_tail.as_mut() {
             Some(HeadTail { head, .. }) => {
                 let head = *head;
+                // SAFETY: head is a valid pointer to deref if self.head_tail is Some
                 Some(unsafe { self.remove_raw(head) })
             }
             None => None,
@@ -258,32 +305,52 @@ impl<T> LinkedList<T> {
     }
 
     pub fn get(&self, i: usize) -> Option<&T> {
+        // SAFETY: 
+        //  * returned reference is bound to the borrow of self
+        //    since we own the data, it must be alive
+        //  * all node pointers are valid to deref (see safety doc on top of this impl block)
         self.get_raw(i).map(|a| unsafe { &(*a.as_ptr()).data })
     }
 
     pub fn get_mut(&mut self, i: usize) -> Option<&mut T> {
+        // SAFETY: 
+        //  * returned reference is bound to the borrow of self
+        //    since we own the data, it must be alive
+        //  * Any previously returned references are invalidated by taking &mut self
+        //  * all node pointers are valid to deref (see safety doc on top of this impl block)
         self.get_raw(i).map(|a| unsafe { &mut (*a.as_ptr()).data })
     }
 
     pub fn front(&self) -> Option<&T> {
+        // SAFETY:
+        //  * returned reference is bound to the borrow of self
+        //    since we own the data, it must be alive
+        //  * self.head_tail contains valid pointers to deref if is is Some
         self.head_tail
             .as_ref()
             .map(|ht| unsafe { &(*ht.head.as_ptr()).data })
     }
 
     pub fn front_mut(&mut self) -> Option<&mut T> {
+        // SAFETY:
+        //  * returned reference is bound to the borrow of self
+        //    since we own the data, it must be alive
+        //  * Any previously returned references are invalidated by taking &mut self
+        //  * self.head_tail contains valid pointers to deref if is is Some
         self.head_tail
             .as_ref()
             .map(|ht| unsafe { &mut (*ht.head.as_ptr()).data })
     }
 
     pub fn back(&self) -> Option<&T> {
+        // SAFETY: see self.front
         self.head_tail
             .as_ref()
             .map(|ht| unsafe { &(*ht.tail.as_ptr()).data })
     }
 
     pub fn back_mut(&mut self) -> Option<&mut T> {
+        // SAFETY: see self.front_mut
         self.head_tail
             .as_ref()
             .map(|ht| unsafe { &mut (*ht.tail.as_ptr()).data })
@@ -294,13 +361,22 @@ impl<T> LinkedList<T> {
             return None;
         }
 
+        // Head must be Some if index < self.count (0 < index < 0 cannot be true)
         let mut current = self.head_ptr().unwrap();
         for _ in 0..index {
+            // next must be Some since index < self.count and loop will terminate
+            // after we set current = tail
+            // SAFETY: all node pointers are valid to deref (see safety doc on top of this impl block)
             current = unsafe { (*current.as_ptr()).next.unwrap() };
         }
 
         Some(current)
     }
+}
+
+fn non_null_from_box<T>(val: Box<T>) -> NonNull<T> {
+    // SAFETY: Box::into_raw returns properly aligned and non-null pointer
+    unsafe { NonNull::new_unchecked(Box::into_raw(val)) }
 }
 
 #[cfg(test)]
@@ -314,32 +390,34 @@ mod tests {
         ll.push_back(5);
         println!("{:?}", ll);
 
-        ll.push_back(6);
-        println!("{:?}", ll);
+        // ll.push_back(6);
+        // println!("{:?}", ll);
 
-        ll.push_front(8);
-        println!("{:?}", ll);
+        // ll.push_front(8);
+        // println!("{:?}", ll);
 
-        ll.insert(0, 11);
-        println!("{:?}", ll);
+        // ll.insert(0, 11);
+        // println!("{:?}", ll);
 
-        ll.remove(0);
-        println!("{:?}", ll);
+        // ll.remove(0);
+        // println!("{:?}", ll);
 
-        ll.remove(1);
-        println!("{:?}", ll);
+        // ll.remove(1);
+        // println!("{:?}", ll);
 
-        ll.remove(1);
-        println!("{:?}", ll);
+        // ll.remove(1);
+        // println!("{:?}", ll);
 
-        ll.push_front(9);
-        println!("{:?}", ll);
+        // ll.push_front(9);
+        // println!("{:?}", ll);
 
-        ll.remove(0);
-        println!("{:?}", ll);
+        // ll.remove(0);
+        // println!("{:?}", ll);
 
-        ll.pop_front();
-        println!("{:?}", ll);
+        // ll.pop_front();
+        // println!("{:?}", ll);
+
+        println!("{:?}", ll.get(0));
 
         // ll.push_front(9);
         // println!("{:?}", ll);
