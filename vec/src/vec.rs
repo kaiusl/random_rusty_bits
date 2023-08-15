@@ -4,6 +4,7 @@ use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::{fmt, mem, ptr, slice};
+
 use crate_alloc::alloc;
 
 struct Vec2<T> {

@@ -18,7 +18,7 @@ fn solve(input: &str) -> usize {
                     current_len = 1;
                     current_char = ch;
                 }
-            },
+            }
             None => {
                 max = max.max(current_len);
                 break;

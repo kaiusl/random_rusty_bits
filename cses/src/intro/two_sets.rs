@@ -3,7 +3,7 @@ fn solve(n: usize) -> Option<(Vec<usize>, Vec<usize>)> {
     if is_odd(sum) {
         None
     } else {
-        let size = n / 2+1;
+        let size = n / 2 + 1;
         // Only even sums are divisible into two
         let mut set_a = Vec::with_capacity(size);
         let mut set_b = Vec::with_capacity(size);
@@ -62,7 +62,9 @@ mod tests {
         assert_eq!(solve(3), Some((vec![1, 2], vec![3])));
         assert_eq!(solve(7), Some((vec![1, 2, 4, 7], vec![3, 5, 6])));
         assert_eq!(solve(8), Some((vec![1, 8, 3, 6], vec![2, 7, 4, 5])));
-        let Some((a, b)) = solve(199999) else { panic!() };
+        let Some((a, b)) = solve(199999) else {
+            panic!()
+        };
         test_eq_sums(&a, &b);
     }
 

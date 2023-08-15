@@ -14,7 +14,7 @@ fn solve(n: u64) -> Option<Vec<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
- 
+
     fn check_diff(slice: &[u64]) {
         for pair in slice.windows(2) {
             assert!(pair[0].abs_diff(pair[1]) > 1);

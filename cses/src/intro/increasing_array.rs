@@ -22,6 +22,5 @@ mod tests {
         assert_eq!(solve(vec![3, 2, 5, 1, 7]), 5);
         assert_eq!(solve(vec![1, 2, 3, 4, 5]), 0);
         assert_eq!(solve(vec![1, 1, 1, 1, 1]), 0);
-        
     }
 }

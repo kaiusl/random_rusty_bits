@@ -9,7 +9,8 @@ fn solve(count: u64, mut numbers: Vec<u64>) -> u64 {
     numbers.sort();
     assert!(
         numbers.is_empty() || numbers.last().unwrap() <= &count,
-        "expected consecutive numbers `1, 2 ... count` except one, found at least one larger number {}", numbers.last().unwrap()
+        "expected consecutive numbers `1, 2 ... count` except one, found at least one larger number {}",
+        numbers.last().unwrap()
     );
 
     match numbers.as_slice() {

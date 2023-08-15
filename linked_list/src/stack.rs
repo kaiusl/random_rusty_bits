@@ -125,8 +125,5 @@ mod tests {
 
         ll.pop();
         println!("{:?}", ll);
-
-
-
     }
 }

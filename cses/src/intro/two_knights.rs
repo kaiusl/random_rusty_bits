@@ -1,8 +1,7 @@
 fn solve(n: u64) -> u64 {
-    let total_positions = (n*n-1..=n*n).product::<u64>()/2;
-    total_positions - (4*(n-1)*(n-2))
+    let total_positions = (n * n - 1..=n * n).product::<u64>() / 2;
+    total_positions - (4 * (n - 1) * (n - 2))
 }
-
 
 // a b a b a
 // b a a a b
@@ -16,9 +15,7 @@ fn solve(n: u64) -> u64 {
 // Adjacent to corner to the inside rules out 4 positions
 // Middle edge rules out 4 positions
 // Inner edge rules out 6 positions
-// 
-
-
+//
 
 #[cfg(test)]
 mod tests {
