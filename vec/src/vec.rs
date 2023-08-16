@@ -20,10 +20,6 @@ struct Vec2<T> {
     marker: PhantomData<T>,
 }
 
-fn covariant<'a, T>(a: Vec2<&'static T>) -> Vec2<&'a T> {
-    a
-}
-
 impl<T> fmt::Debug for Vec2<T>
 where
     T: fmt::Debug,
@@ -372,45 +368,97 @@ mod tests {
 
     use super::*;
 
+    fn covariant<'a, T>(a: Vec2<&'static T>) -> Vec2<&'a T> {
+        a
+    }
+
     #[test]
     fn it_works() {
         let mut v = Vec2::new();
+        assert!(v.is_empty());
         v.push(2);
-        println!("{:?}", v);
+        assert_eq!(v.len(), 1);
         v.push(3);
-        println!("{:?}", v);
+        assert_eq!(v.len(), 2);
         v.push(4);
-        println!("{:?}", v);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.as_slice(), &[2, 3, 4]);
 
-        v.pop();
-        println!("{:?}", v);
-        v.pop();
-        println!("{:?}", v);
+        assert_eq!(v.pop(), Some(4));
+        assert_eq!(v.len(), 2);
+        assert_eq!(v.pop(), Some(3));
+        assert_eq!(v.len(), 1);
         v.insert(1, 5).unwrap();
-        println!("{:?}", v);
+        assert_eq!(v.len(), 2);
         v.insert(1, 6).unwrap();
-        println!("{:?}", v);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.as_slice(), &[2, 6, 5]);
 
-        v.remove(1);
-        println!("{:?}", v);
+        assert_eq!(v.remove(1), Some(6));
+        assert_eq!(v.len(), 2);
     }
 
     #[test]
     fn it_works2() {
         let mut v = Vec2::new();
         v.push(String::from("2"));
-        println!("{:?}", v);
         v.push(String::from("3"));
-        println!("{:?}", v);
         v.push(String::from("4"));
-        println!("{:?}", v);
 
         v.pop();
-        println!("{:?}", v);
         v.pop();
-        println!("{:?}", v);
-        v.pop();
-        println!("{:?}", v);
+    }
+
+    #[test]
+    fn get() {
+        let mut v = Vec2::new();
+        v.push(2);
+        v.push(3);
+        v.push(4);
+
+        assert_eq!(v.get(0), Some(&2));
+        assert_eq!(v.get(1), Some(&3));
+        assert_eq!(v.get(2), Some(&4));
+        assert_eq!(v.get(3), None);
+    }
+
+    #[test]
+    fn remove() {
+        let mut v = Vec2::new();
+        assert_eq!(v.remove(0), None);
+
+        v.push(2);
+        v.push(3);
+        v.push(4);
+        v.push(5);
+        v.push(6);
+        v.push(7);
+
+        assert_eq!(v.remove(0), Some(2)); // first
+        assert_eq!(v.remove(v.len()), None); // past end
+        assert_eq!(v.remove(v.len() - 1), Some(7)); // last
+        assert_eq!(v.remove(1), Some(4)); // middle
+    }
+
+    #[test]
+    fn insert() {
+        let mut v = Vec2::new();
+        assert_eq!(v.insert(1, 1), Err(1));
+        v.insert(0, 1).unwrap(); // start
+        v.insert(1, 2).unwrap(); // end
+        v.insert(1, 3).unwrap(); // middle
+        assert_eq!(v.as_slice(), &[1, 3, 2])
+    }
+
+    #[test]
+    fn pop() {
+        let mut v = Vec2::new();
+        assert_eq!(v.pop(), None);
+        v.push(2);
+        v.push(3);
+        assert_eq!(v.pop(), Some(3));
+        assert_eq!(v.pop(), Some(2));
+        assert_eq!(v.pop(), None);
     }
 
     #[test]
