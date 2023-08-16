@@ -177,16 +177,10 @@ impl<T> Vec2<T> {
 
         assert!(self.len < self.cap);
         // SAFETY:
-        //  * `self.buf` is valid pointer for `self.cap > self.len` `T`s so the resulting pointer is in bounds
-        //  * computed offset `self.len * mem::size_of::<T>() < isize::MAX`
-        //    because our allocation size `self.cap * mem::size_of::<T>()`
-        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
-        let ptr = unsafe { self.buf.as_ptr().add(self.len) };
-        // SAFETY:
-        //  * `ptr` is valid for writes because it's derived from `NonNull<T>` to the
-        //    whole buffer and we haven't given out a reference to that location before
-        //  * `ptr` is properly aligned because `self.buf` is properly aligned and `ptr::add` keeps the pointer aligned
-        unsafe { ptr.write(val) };
+        //  * self.len < self.cap, is in bounds
+        //  * `ptr` points to the first uninitialized `T` and thus self.len + 1
+        //    first items will be initialized after this write
+        unsafe { self.write_at(self.len, val) };
         self.len += 1;
     }
 
@@ -198,21 +192,10 @@ impl<T> Vec2<T> {
         // Want to read at last index, so decrement before reading
         self.len -= 1;
         // SAFETY:
-        //  * `self.buf` is valid pointer for `self.cap > self.len` `T`s so the resulting pointer is in bounds
-        //  * computed offset `self.len * mem::size_of::<T>() < isize::MAX`
-        //    because our allocation size `self.cap * mem::size_of::<T>()`
-        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
-        let ptr = unsafe { self.buf.as_ptr().add(self.len) };
-        // SAFETY:
+        //  * self.len = orig_len - 1 is the index of last item, is in bounds,
+        //  * no-one has references to this item
         //  * this item will never be read again, only written over
-        //  * `ptr` is valid to be read from
-        //    - it is properly aligned because self.buf is and ptr::add keeps it aligned
-        //    - it is non-null because self.buf is non-null
-        //    - any references given out before are invalidated by taking
-        //      `&mut self` (all returned references are bound to a borrow of `self`)
-        //  * `ptr` points to a properly initialized `T` since first `self.len`
-        //    items in `self.buf` are initialized (see INVARIANTS in struct definition)
-        let val = unsafe { ptr.read() };
+        let val = unsafe { self.read_at(self.len) };
         Some(val)
     }
 
@@ -221,12 +204,8 @@ impl<T> Vec2<T> {
             return None;
         }
 
-        // SAFETY:
-        //  * `self.buf` is valid pointer for `self.cap > self.len` `T`s so the resulting pointer is in bounds
-        //  * computed offset `self.len * mem::size_of::<T>() < isize::MAX`
-        //    because our allocation size `self.cap * mem::size_of::<T>()`
-        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
-        let ptr = unsafe { self.buf.as_ptr().add(index) };
+        // SAFETY: index is in bounds (checked above)
+        let ptr = unsafe { self.get_raw_unchecked(index) };
         // SAFETY:
         //  * lifetime of returned reference is bound to the borrow of `self`, is must remain alive for '0
         //  * `ptr` is non-null as self.buf is non-null
@@ -247,21 +226,9 @@ impl<T> Vec2<T> {
         }
 
         // SAFETY:
-        //  * `self.buf` is valid pointer for `self.cap > self.len > index` `T`s so the resulting pointer is in bounds
-        //  * computed offset `index * mem::size_of::<T>() < isize::MAX`
-        //    because our allocation size `self.cap * mem::size_of::<T>()`
-        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
-        let ptr = unsafe { self.buf.as_ptr().add(index) };
-        // SAFETY:
+        //  * index is in bounds (checked above) and no-one has references to it
         //  * this item will never be read again, only written over
-        //  * `ptr` is valid to be read from
-        //    - it is properly aligned because self.buf is and ptr::add keeps it aligned
-        //    - it is non-null because self.buf is non-null
-        //    - any references given out before are invalidated by taking
-        //      `&mut self` (all returned references are bound to a borrow of `self`)
-        //  * `ptr` points to a properly initialized `T` since first `self.len`
-        //    items in `self.buf` are initialized (see INVARIANTS in struct definition)
-        let val = unsafe { ptr.read() };
+        let val = unsafe { self.read_at(index) };
 
         // shift tail down by 1 position
         // [head] [empty_slot] [tail]     [after]
@@ -271,20 +238,11 @@ impl<T> Vec2<T> {
         // In that case tail_count must equal 0, thus tail_count = self.len - index = orig_len - 1 - index
         let tail_count = self.len - index;
         if tail_count > 0 {
-            unsafe {
-                // SAFETY: since tail_count > 0 there must be at least one item
-                //  after index, thus ptr.add(1) must also be in bounds for self.buf
-                let tail_start = ptr.add(1);
-                // SAFETY:
-                //  * src and dst may overlap, use ptr::copy
-                //  * tail_start points to a first valid item after the removed one
-                //  * tail_start is valid to be read tail_count items because
-                //    index + 1 + tail_count = orig_len which must be valid initialized `T`s
-                //  * `ptr` is valid to write tail_count items because all these positions were previously initialized and thus were checked to be valid.
-                //    And by taking `&mut self` we invalidate any previously returned references to the items which will be moved.
-                //  * `ptr` is properly aligned because `self.buf` is properly aligned and `ptr::add` keeps the pointer aligned
-                ptr::copy(tail_start, ptr, tail_count)
-            }
+            // SAFETY:
+            //  * [index + 1, index + 1 + tail_count = self.len + 1 = orig_len) items are initialized and valid to be read (tail items)
+            //  * by taking `&mut self` we invalidate any previously returned references, whole buffer is valid to be written to.
+            //  * since amount == -1 and index is in bounds, dst must be in bounds
+            unsafe { self.shift_items(index + 1, tail_count, -1) }
         }
 
         // SAFETY:
@@ -292,6 +250,78 @@ impl<T> Vec2<T> {
         //    items in self.buf are initialized and all our invariants hold
 
         Some(val)
+    }
+
+    /// Write `val` at `index`.
+    ///
+    /// # SAFETY
+    ///
+    /// * `index < self.cap`
+    /// * item at `index` must be valid to be written to
+    unsafe fn write_at(&mut self, index: usize, val: T) {
+        let ptr = unsafe { self.get_raw_unchecked(index) };
+        // SAFETY:
+        //  * get_raw_unchecked return non-null and properly aligned pointers into self.buf
+        //  * any references given out before are invalidated by taking
+        //    `&mut self` (all returned references are bound to a borrow of `self`)
+        unsafe { ptr.write(val) };
+    }
+
+    /// Read the item at `index`.
+    ///
+    /// # SAFETY
+    ///
+    /// * item at `index` must be valid to be read
+    /// * item at `index` must never be read from again
+    unsafe fn read_at(&mut self, index: usize) -> T {
+        // SAFETY: index is in bounds
+        let ptr = unsafe { self.get_raw_unchecked(index) };
+        // SAFETY:
+        //  * this item will never be read again, only written over
+        //  * `ptr` is valid to be read from
+        //    - get_raw_unchecked return non-null and properly aligned pointers
+        //    - any references given out before are invalidated by taking
+        //      `&mut self` (all returned references are bound to a borrow of `self`)
+        //  * `ptr` points to a properly initialized `T` since first `self.len`
+        //    items in `self.buf` are initialized (see INVARIANTS in struct definition)
+        unsafe { ptr.read() }
+    }
+
+    /// # SAFETY
+    ///
+    /// * src = [start, start + count) must be initialized items valid to be read
+    /// * dst = [start + amount, start + amount + count) must be valid to be written to
+    unsafe fn shift_items(&mut self, start: usize, count: usize, amount: isize) {
+        unsafe {
+            // SAFETY: start < self.cap
+            let src = self.get_raw_unchecked(start);
+            // SAFETY: 0 <= start + amount < self.cap
+            let dst = src.offset(amount);
+            // SAFETY:
+            //  * src and dst may overlap, use ptr::copy
+            //  * `src` and `dst` are properly aligned and non-null
+            //  * `src` is valid for count reads because self.buf must have at least start + count initialized items
+            //  * `dst` is valid for count writes because self.buf has memory for at least start + amount + count items
+            ptr::copy(src, dst, count)
+        }
+    }
+
+    /// Returns a pointer to item at `index` in `self.buf`.
+    ///
+    /// The returned pointer is non-null and properly aligned.
+    /// The pointed item may be uninitialized.
+    ///
+    /// # SAFETY
+    ///
+    /// * `index` must be in bounds of buffer (`index < self.cap`)
+    unsafe fn get_raw_unchecked(&self, index: usize) -> *mut T {
+        // SAFETY:
+        //  * `self.buf` is valid pointer for `self.cap >= self.len > index`
+        //    `T`s so the resulting pointer is in bounds
+        //  * computed offset `index * mem::size_of::<T>() < isize::MAX`
+        //    because our allocation size `self.cap * mem::size_of::<T>()`
+        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
+        unsafe { self.buf.as_ptr().add(index) }
     }
 
     pub fn insert(&mut self, index: usize, val: T) -> Result<(), T> {
@@ -309,38 +339,24 @@ impl<T> Vec2<T> {
             self.grow()
         }
 
-        unsafe {
-            // shift tail up by 1 position
+        assert!(self.len < self.cap);
 
-            // [head] [tail]   [after]
-            //        ^-index  ^-self.len
+        let tail_count = self.len - index;
+        // SAFETY:
+        //  * [index, index + tail_count = self.len) items are initialized,
+        //    previous references and invalidated and thus valid to be read
+        //  * we checked that there is room for one more item,
+        //    thus items at [index + 1, index + tail_count + 1 = self.len + 1 <= self.cap) are valid to be written to
+        unsafe { self.shift_items(index, tail_count, 1) }
 
-            // SAFETY:
-            //  * `self.buf` is valid pointer for `self.cap > self.len > index` `T`s so the resulting pointer is in bounds
-            //  * computed offset `index * mem::size_of::<T>() < isize::MAX`
-            //    because our allocation size `self.cap * mem::size_of::<T>()`
-            //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
-            let tail_start = self.buf.as_ptr().add(index);
-            let tail_count = self.len - index;
-            // SAFETY:
-            //  * we checked that there is capacity for 1 more item
-            //  * tail_start is valid to be read tail_count items because
-            //    index + tail_count = self.len which must be valid initialized `T`s
-            ptr::copy(tail_start, tail_start.add(1), tail_count)
-            // [head] [empty]  [tail] [after]
-            //        ^-index         ^-self.len
-        }
+        // SAFETY:
+        //  * `index < self.cap`, is in bounds
+        //  * previous item at `index` was shifted away, `index` is an empty slot
+        unsafe { self.write_at(index, val) }
 
-        unsafe {
-            // write new value to buf[index]
-            // SAFETY: see comment on `tail_start` above
-            let ptr = self.buf.as_ptr().add(index);
-            // SAFETY:
-            //  * `ptr` is valid for writes because it's derived from `NonNull<T>` to the
-            //    whole buffer and we haven't given out a reference to that location before
-            //  * `ptr` is properly aligned because `self.buf` is properly aligned and `ptr::add` keeps the pointer aligned
-            ptr.write(val);
-        }
+        // SAFETY:
+        //  * as we moved [index, self.len) items up by one and filled the gap at index,
+        //    self.len + 1 first items are now initialized
 
         self.len += 1;
 
@@ -393,7 +409,7 @@ mod tests {
         println!("{:?}", v);
         v.pop();
         println!("{:?}", v);
-        //v.pop();
+        v.pop();
         println!("{:?}", v);
     }
 
