@@ -108,64 +108,6 @@ impl<T> Vec2<T> {
         unsafe { slice::from_raw_parts(self.buf.as_ptr().cast_const(), self.len) }
     }
 
-    #[inline]
-    fn current_layout(&self) -> Layout {
-        // This cannot return Err variant as we have already checked it
-        Layout::array::<T>(self.cap).unwrap()
-    }
-
-    fn grow_to(&mut self, new_cap: usize) {
-        if new_cap <= self.cap {
-            return;
-        }
-
-        let (buf, layout) = if self.cap == 0 {
-            let layout = Layout::array::<T>(new_cap).unwrap();
-            debug_assert_ne!(layout.size(), 0);
-            // SAFETY: `new_cap * mem::size_of<T>() > 0` because `new_cap > 0`
-            //  (new_cap > cap == 0 by combining two if statements) and we
-            //  don't support ZST
-            let buf = unsafe { alloc::alloc(layout) };
-            (buf, layout)
-        } else {
-            let new_layout = Layout::array::<T>(new_cap).unwrap();
-            // SAFETY:
-            //  * we allocate only with Global allocator (we don't support custom allocators)
-            //  * `self.current_layout()` returns the layout of current `self.buf`
-            //  * `new_size = new_layout.size() > 0` because (`new_cap > cap != 0`) and we don't support ZST
-            //  * `new_size = new_layout.size() < isize::MAX` because `Layout::array` would panic if this is not the case.
-            let buf = unsafe {
-                alloc::realloc(
-                    self.buf.as_ptr().cast::<u8>(),
-                    self.current_layout(),
-                    new_layout.size(),
-                )
-            };
-            (buf, new_layout)
-        };
-
-        if buf.is_null() {
-            alloc::handle_alloc_error(layout)
-        } else {
-            // SAFETY:
-            //  * we just checked that buf is not null.
-            self.buf = unsafe { NonNull::new_unchecked(buf.cast::<T>()) };
-            self.cap = new_cap;
-        }
-    }
-
-    fn grow(&mut self) {
-        let new_cap = if self.cap == 0 {
-            Self::INITIAL_CAP
-        } else {
-            // Cannot overflow because Layout::array constraints the total
-            // number of bytes allocated to be less than isize::MAX.
-            // Thus at most self.cap == isize::MAX and isize::MAX * 2 == usize::MAX - 1
-            self.cap * 2
-        };
-        self.grow_to(new_cap);
-    }
-
     pub fn push(&mut self, val: T) {
         if self.len == self.cap {
             self.grow()
@@ -211,11 +153,6 @@ impl<T> Vec2<T> {
         unsafe { Some(&*ptr) }
     }
 
-    #[inline(always)]
-    fn is_in_bounds(&self, index: usize) -> bool {
-        index < self.len
-    }
-
     pub fn remove(&mut self, index: usize) -> Option<T> {
         if !self.is_in_bounds(index) {
             return None;
@@ -246,6 +183,68 @@ impl<T> Vec2<T> {
         //    items in self.buf are initialized and all our invariants hold
 
         Some(val)
+    }
+
+    pub fn insert(&mut self, index: usize, val: T) -> Result<(), T> {
+        if index > self.len {
+            // index == self.len is ok here, it's equivalent to self.push
+            return Err(val);
+        }
+
+        if index == self.len {
+            self.push(val);
+            return Ok(());
+        }
+
+        if self.len == self.cap {
+            self.grow()
+        }
+
+        assert!(self.len < self.cap);
+
+        let tail_count = self.len - index;
+        // SAFETY:
+        //  * [index, index + tail_count = self.len) items are initialized,
+        //    previous references and invalidated and thus valid to be read
+        //  * we checked that there is room for one more item,
+        //    thus items at [index + 1, index + tail_count + 1 = self.len + 1 <= self.cap) are valid to be written to
+        unsafe { self.shift_items(index, tail_count, 1) }
+
+        // SAFETY:
+        //  * `index < self.cap`, is in bounds
+        //  * previous item at `index` was shifted away, `index` is an empty slot
+        unsafe { self.write_at(index, val) }
+
+        // SAFETY:
+        //  * as we moved [index, self.len) items up by one and filled the gap at index,
+        //    self.len + 1 first items are now initialized
+
+        self.len += 1;
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn is_in_bounds(&self, index: usize) -> bool {
+        index < self.len
+    }
+
+    /// Returns a pointer to item at `index` in `self.buf`.
+    ///
+    /// The returned pointer is non-null and properly aligned.
+    /// The pointed item may be uninitialized.
+    ///
+    /// # SAFETY
+    ///
+    /// * `index` must be in bounds of buffer (`index < self.cap`)
+    unsafe fn get_raw_unchecked(&self, index: usize) -> *mut T {
+        // SAFETY:
+        //  * `self.buf` is valid pointer for `self.cap >= self.len > index`
+        //    `T`s so the resulting pointer is in bounds
+        //  * computed offset `index * mem::size_of::<T>() < isize::MAX`
+        //    because our allocation size `self.cap * mem::size_of::<T>()`
+        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
+        unsafe { self.buf.as_ptr().add(index) }
     }
 
     /// Write `val` at `index`.
@@ -302,61 +301,62 @@ impl<T> Vec2<T> {
         }
     }
 
-    /// Returns a pointer to item at `index` in `self.buf`.
-    ///
-    /// The returned pointer is non-null and properly aligned.
-    /// The pointed item may be uninitialized.
-    ///
-    /// # SAFETY
-    ///
-    /// * `index` must be in bounds of buffer (`index < self.cap`)
-    unsafe fn get_raw_unchecked(&self, index: usize) -> *mut T {
-        // SAFETY:
-        //  * `self.buf` is valid pointer for `self.cap >= self.len > index`
-        //    `T`s so the resulting pointer is in bounds
-        //  * computed offset `index * mem::size_of::<T>() < isize::MAX`
-        //    because our allocation size `self.cap * mem::size_of::<T>()`
-        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
-        unsafe { self.buf.as_ptr().add(index) }
+    #[inline]
+    fn current_layout(&self) -> Layout {
+        // This cannot return Err variant as we have already checked it
+        Layout::array::<T>(self.cap).unwrap()
     }
 
-    pub fn insert(&mut self, index: usize, val: T) -> Result<(), T> {
-        if index > self.len {
-            // index == self.len is ok here, it's equivalent to self.push
-            return Err(val);
+    fn grow_to(&mut self, new_cap: usize) {
+        if new_cap <= self.cap {
+            return;
         }
 
-        if index == self.len {
-            self.push(val);
-            return Ok(());
+        let (buf, layout) = if self.cap == 0 {
+            let layout = Layout::array::<T>(new_cap).unwrap();
+            debug_assert_ne!(layout.size(), 0);
+            // SAFETY: `new_cap * mem::size_of<T>() > 0` because `new_cap > 0`
+            //  (new_cap > cap == 0 by combining two if statements) and we
+            //  don't support ZST
+            let buf = unsafe { alloc::alloc(layout) };
+            (buf, layout)
+        } else {
+            let new_layout = Layout::array::<T>(new_cap).unwrap();
+            // SAFETY:
+            //  * we allocate only with Global allocator (we don't support custom allocators)
+            //  * `self.current_layout()` returns the layout of current `self.buf`
+            //  * `new_size = new_layout.size() > 0` because (`new_cap > cap != 0`) and we don't support ZST
+            //  * `new_size = new_layout.size() < isize::MAX` because `Layout::array` would panic if this is not the case.
+            let buf = unsafe {
+                alloc::realloc(
+                    self.buf.as_ptr().cast::<u8>(),
+                    self.current_layout(),
+                    new_layout.size(),
+                )
+            };
+            (buf, new_layout)
+        };
+
+        if buf.is_null() {
+            alloc::handle_alloc_error(layout)
+        } else {
+            // SAFETY:
+            //  * we just checked that buf is not null.
+            self.buf = unsafe { NonNull::new_unchecked(buf.cast::<T>()) };
+            self.cap = new_cap;
         }
+    }
 
-        if self.len == self.cap {
-            self.grow()
-        }
-
-        assert!(self.len < self.cap);
-
-        let tail_count = self.len - index;
-        // SAFETY:
-        //  * [index, index + tail_count = self.len) items are initialized,
-        //    previous references and invalidated and thus valid to be read
-        //  * we checked that there is room for one more item,
-        //    thus items at [index + 1, index + tail_count + 1 = self.len + 1 <= self.cap) are valid to be written to
-        unsafe { self.shift_items(index, tail_count, 1) }
-
-        // SAFETY:
-        //  * `index < self.cap`, is in bounds
-        //  * previous item at `index` was shifted away, `index` is an empty slot
-        unsafe { self.write_at(index, val) }
-
-        // SAFETY:
-        //  * as we moved [index, self.len) items up by one and filled the gap at index,
-        //    self.len + 1 first items are now initialized
-
-        self.len += 1;
-
-        Ok(())
+    fn grow(&mut self) {
+        let new_cap = if self.cap == 0 {
+            Self::INITIAL_CAP
+        } else {
+            // Cannot overflow because Layout::array constraints the total
+            // number of bytes allocated to be less than isize::MAX.
+            // Thus at most self.cap == isize::MAX and isize::MAX * 2 == usize::MAX - 1
+            self.cap * 2
+        };
+        self.grow_to(new_cap);
     }
 }
 
