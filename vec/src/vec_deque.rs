@@ -8,15 +8,17 @@ use core::{fmt, mem, ptr, slice};
 use crate_alloc::alloc;
 
 struct VecDeque2<T> {
+    /// INVARIANTS:
+    ///  * `len <= cap` and `head < cap` or if `cap == 0` then `head == len == cap == 0`
+    ///  * `len` contiguous elements are initialized in `buf` starting from `head`
+    ///    (they may wrap around the `buf`) (is there a better way to word this???)
+    ///  * `buf` is valid pointer to contiguous memory to store `cap` `T`s
+    ///    (`buf` can only be `NonNull::dangling` if `cap == len == 0`)
     buf: NonNull<T>,
     head: usize,
     len: usize,
     cap: usize,
     marker: PhantomData<T>,
-}
-
-fn covariant<'a, T>(a: VecDeque2<&'static T>) -> VecDeque2<&'a T> {
-    a
 }
 
 impl<T> fmt::Debug for VecDeque2<T>
@@ -52,6 +54,7 @@ impl<T> Drop for VecDeque2<T> {
 
                 assert_eq!(self.0.len, 0);
 
+                // We haven't yet updated self.buf and self.cap
                 let layout = self.0.current_layout();
                 self.0.cap = 0;
                 self.0.head = 0;
@@ -59,6 +62,8 @@ impl<T> Drop for VecDeque2<T> {
                     .as_ptr()
                     .cast::<u8>();
 
+                // SAFETY:
+                //  * we allocate only with Global allocator (we don't support custom allocators)
                 unsafe { alloc::dealloc(buf, layout) };
             }
         }
@@ -77,7 +82,7 @@ impl<T> VecDeque2<T> {
     pub fn new() -> Self {
         assert!(mem::size_of::<T>() != 0, "we don't (yet) support ZST");
         Self {
-            // SAFETY: self.buf is never touched before actually initializing it
+            // SAFETY: self.buf is never touched before actually allocating it
             buf: NonNull::dangling(),
             head: 0,
             len: 0,
@@ -100,19 +105,81 @@ impl<T> VecDeque2<T> {
         self.len == 0
     }
 
-    // right and left counts assuming that self is wrapped around
+    /// Right and left counts assuming that self is wrapped around.
+    ///
+    /// It is safe to call while self is not wrapped but the counts are wrong.
     fn right_left_counts(&self) -> (usize, usize) {
         debug_assert!(self.is_wrapped());
         // [left]  [empty]  [right] [after buf]
         // ^- 0             ^- head ^- cap
         //      ^- left_count-1   ^- head+right_count-1
+        //
+        // An example:
+        // [uninit, uninit, uninit, uninit, 0, 1, 2, 3]
+        //   cap = 8, len = 4, head = 4
+        //   rc = 8 - 4 = 4, lc = 4 - 4 = 0
+        // [5, uninit, uninit, uninit, 0, 1, 2, 3]
+        //   cap = 8, len = 5, head = 4
+        //   rc = 8 - 4 = 4, lc = 5 - 4 = 1
         let right_count = self.cap - self.head;
-        let left_count = self.len - right_count;
+        let left_count = usize::saturating_sub(self.len, right_count);
         (right_count, left_count)
     }
 
+    /// Return true is initialized items in `self.buf` are wrapped around the buffer.
+    ///
+    /// This means that buffer looks something like [initialized] [empty] [initialized]
+    ///                                                                   ^- head
+    /// Always `false` if `self.len <= 1` or can only be true if `self.len > 1`.
     fn is_wrapped(&self) -> bool {
+        // * If cap == 0 then also head == len == 0 and 0 > 0 is false.
+        // * If len == 0, then we return head > cap however our invariants state that
+        //   head < cap, thus condition below is always false
+        // * Similarly if len == 1, then head + 1 > cap is also always false,
+        //   at best head + len == cap, but is never larger
+
+        // An example:
+        // [uninit, uninit, uninit, uninit, 0, 1, 2, 3]
+        // cap = 8, len = 4, head = 4 => 4 + 4 > 8 == false, no wrapping
+        // [5, uninit, uninit, uninit, 0, 1, 2, 3]
+        // cap = 8, len = 5, head = 4 => 4 + 5 > 8 == true, wrapped
         self.head + self.len > self.cap
+    }
+
+    /// Returns a pointer to the head of vec in `self.buf`.
+    ///
+    /// The returned pointer is non-null and properly aligned.
+    /// The pointed item is uninitialized if `self.len == 0`,
+    /// but is guaranteed to be initialized otherwise.
+    ///
+    /// # SAFETY
+    ///
+    /// * `self.cap > 0` that is the buffer must have been allocated before calling this method
+    unsafe fn head_ptr(&self) -> *mut T {
+        // SAFETY:
+        //  * self.head must be in bounds of self.buf after it's been allocated (see INVARIANTS)
+        unsafe { self.get_raw_unchecked(self.head) }
+    }
+
+    /// Returns a pointer to item at `index` in `self.buf`.
+    ///
+    /// The returned pointer is non-null and properly aligned but the pointed
+    /// item may be uninitialized.
+    ///
+    /// # SAFETY
+    ///
+    /// * `index` must be in bounds of buffer (`index < self.cap`)
+    ///   Consequently this also implies that `self.buf` must have been allocated
+    ///   and `self.cap > 0`.
+    unsafe fn get_raw_unchecked(&self, index: usize) -> *mut T {
+        // SAFETY:
+        //  * `self.buf` is guaranteed to be initialized by caller and thus is a valid pointer
+        //  * `self.buf` is valid pointer for `self.cap > index`
+        //    `T`s so the resulting pointer is in bounds
+        //  * computed offset `index * mem::size_of::<T>() < isize::MAX`
+        //    because our allocation size `self.cap * mem::size_of::<T>()`
+        //    is checked to be `< isize::MAX` in allocation code (see `self.grow_to`)
+        unsafe { self.buf.as_ptr().add(index) }
     }
 
     pub fn as_slices(&self) -> (&[T], &[T]) {
@@ -126,14 +193,25 @@ impl<T> VecDeque2<T> {
             //      ^- left_count-1   ^- head+right_count-1
             let (right_count, left_count) = self.right_left_counts();
 
-            let right_start = unsafe { self.buf.as_ptr().add(self.head).cast_const() };
+            // SAFETY: `self.cap > 0` is checked above
+            let right_start = unsafe { self.head_ptr().cast_const() };
+            // SAFETY:
+            //  * right_count is the number of initialized items from the head_ptr/right_start
+            //  * left_count is the number of initialized items from the start of self.buf
+            //  * head_ptr() returns properly aligned pointer and self.buf is properly aligned
+            //  * all previously given out mutable references are bound to a mutable borrow of self,
+            //    none of those can be alive
+            //  * total size of creates slice cannot be larger than `isize::MAX` because
+            //    our total allocation is smaller than that and these are subslices into it
             let right = unsafe { slice::from_raw_parts(right_start, right_count) };
             let left = unsafe { slice::from_raw_parts(self.buf.as_ptr(), left_count) };
             (right, left)
         } else {
-            let right = unsafe {
-                slice::from_raw_parts(self.buf.as_ptr().add(self.head).cast_const(), self.len)
-            };
+            // SAFETY:
+            //  * as self is not wrapped, there are self.len consecutive initialized ìtems
+            //    starting at index self.head
+            //  * points 3-5 apply from the same operation from if branch
+            let right = unsafe { slice::from_raw_parts(self.head_ptr().cast_const(), self.len) };
             (right, &[])
         }
     }
@@ -150,6 +228,8 @@ impl<T> VecDeque2<T> {
         }
 
         let layout = Layout::array::<T>(new_cap).unwrap();
+        // SAFETY: `new_cap * mem::size_of<T>() > 0` because `new_cap > 0`
+        //  and we don't support ZST
         let buf = unsafe { alloc::alloc(layout) };
 
         if buf.is_null() {
@@ -166,9 +246,17 @@ impl<T> VecDeque2<T> {
                 //  [right]  [left]  [empty]
                 //  ^- 0     ^- right_count
                 //                ^- right_count+left_count-1
-                unsafe {
-                    ptr::copy_nonoverlapping(self.buf.as_ptr().add(self.head), buf, right_count)
-                };
+
+                // SAFETY:
+                //  * right_count is the number of initialized items from the head_ptr/right_start
+                //  * left_count is the number of initialized items from the start of self.buf
+                //  * self.buf and buf are different allocations and don't overlap
+                //  * new buf has capacity for more items than current buffer
+                //  * self.buf is guaranteed to be aligned by our invariants,
+                //    self.head_ptr() return aligned pointer,
+                //    alloc returns aligned pointer
+                //    and ptr::add preserves alignedness.
+                unsafe { ptr::copy_nonoverlapping(self.head_ptr(), buf, right_count) };
                 unsafe {
                     ptr::copy_nonoverlapping(self.buf.as_ptr(), buf.add(right_count), left_count)
                 };
@@ -181,18 +269,26 @@ impl<T> VecDeque2<T> {
                 //   [filled] [empty]
                 //   ^- head=0
                 //          ^- len-1
-                unsafe { ptr::copy_nonoverlapping(self.buf.as_ptr().add(self.head), buf, self.len) }
+
+                // SAFETY:
+                //  * as self is not wrapped, there are self.len consecutive initialized ìtems
+                //    starting at index self.head
+                //  * points 3-5 apply from the same operation from previous branch
+                unsafe { ptr::copy_nonoverlapping(self.head_ptr(), buf, self.len) }
             }
 
+            // We haven't yet updated self.buf and self.cap
             let old_layout = self.current_layout();
+            // SAFETY: buf is non-null in this branch
             let old_buf = mem::replace(&mut self.buf, unsafe {
                 NonNull::new_unchecked(buf.cast::<T>())
             });
-            let olc_cap = self.cap;
-            self.cap = new_cap;
+            let old_cap = mem::replace(&mut self.cap, new_cap);
             self.head = 0;
 
-            if olc_cap != 0 {
+            if old_cap != 0 {
+                // SAFETY:
+                //  * we allocate only with Global allocator (we don't support custom allocators)
                 unsafe { alloc::dealloc(old_buf.as_ptr().cast::<u8>(), old_layout) };
             }
         }
@@ -216,10 +312,15 @@ impl<T> VecDeque2<T> {
         }
 
         debug_assert!(self.len < self.cap);
-        let index = (self.head + self.len) % self.cap;
-
-        let ptr = unsafe { self.buf.as_ptr().add(index) };
-        unsafe { ptr.write(val) };
+        let index = self.get_real_index(self.len);
+        // SAFETY:
+        //  * self.len > 0, thus get_real_index returns a valid index into self.buf
+        //  * by taking &mut self, no-one else can have any references into self.buf
+        //    thus whole buf is valid for us to write into
+        unsafe { self.write_at(index, val) };
+        // SAFETY:
+        //  * index self.len points to the first uninitialized item, thus a write
+        //    at that index keeps the initialized items contiguous
         self.len += 1;
     }
 
@@ -234,8 +335,14 @@ impl<T> VecDeque2<T> {
         } else {
             self.head - 1
         };
-        let ptr = unsafe { self.buf.as_ptr().add(index) };
-        unsafe { ptr.write(val) };
+        // SAFETY:
+        //  * since self.cap > 0, and self.head < self.cap, then index is in bound for self.buf
+        //  * by taking &mut self, no-one else can have any references into self.buf
+        //    thus whole buf is valid for us to write into
+        unsafe { self.write_at(index, val) };
+        // SAFETY:
+        //  * index is always next to the current head, thus a write
+        //    at that index keeps the initialized items contiguous
         self.len += 1;
         self.head = index;
     }
@@ -245,25 +352,22 @@ impl<T> VecDeque2<T> {
             return None;
         }
 
-        self.len -= 1; // Want to read at last index, so decrement before reading
-        let ptr = unsafe { self.buf.as_ptr().add(self.head) };
-        let val = unsafe { ptr.read() };
+        // SAFETY:
+        //  * since self.len > 0, the item at index self.head is initialized
+        //  * self.head is shifted by 1 to the next element,
+        //    so this item is never read again
+        let val = unsafe { self.read_at(self.head) };
         // if new len == 0, self.head can be any index into our buffer
         self.head = if self.head == self.cap - 1 {
             // head was last element in out buffer, wrap around the buffer
+            // [2, 3, uninit, 1], 1 is front, popped it, new head it at index 0
             0
         } else {
             self.head + 1
         };
-        Some(val)
-    }
+        self.len -= 1;
 
-    /// Index of last item. Assumes that self is not empty.
-    ///
-    /// If self is empty, this function returns an meaningless number or panics.
-    #[inline]
-    fn tail_index(&mut self) -> usize {
-        self.get_real_index(self.len - 1)
+        Some(val)
     }
 
     /// The actual index of an index'th element. Assumes that self is not empty
@@ -274,8 +378,7 @@ impl<T> VecDeque2<T> {
     /// a index to random element or even to uninitialized element.
     #[inline]
     fn get_real_index(&self, index: usize) -> usize {
-        debug_assert!(!self.is_empty());
-        debug_assert!(self.is_in_bounds(index));
+        debug_assert!(index < self.cap);
         (self.head + index) % self.cap
     }
 
@@ -284,10 +387,13 @@ impl<T> VecDeque2<T> {
             return None;
         }
 
-        let index = self.tail_index();
+        let index = self.get_real_index(self.len - 1);
+        // SAFETY:
+        //  * since `self.len > 0`, the item at index `self.len - 1` is initialized
+        //  * `self.len` is decremented by 1 so this item cannot be reached from
+        //    `self.head` again
+        let val = unsafe { self.read_at(index) };
         self.len -= 1;
-        let ptr = unsafe { self.buf.as_ptr().add(index) };
-        let val = unsafe { ptr.read() };
         Some(val)
     }
 
@@ -297,8 +403,53 @@ impl<T> VecDeque2<T> {
         }
 
         let index = self.get_real_index(index);
-        let ptr = unsafe { self.buf.as_ptr().add(index) };
+        // SAFETY: index is in bounds (checked above)
+        let ptr = unsafe { self.get_raw_unchecked(index) };
+        // SAFETY:
+        //  * lifetime of returned reference is bound to the borrow of `self`, is must remain alive for '0
+        //  * `ptr` is non-null as self.buf is non-null
+        //  * `ptr` is properly aligned because self.buf is and ptr::add keeps it aligned
+        //  * `ptr` points to a initialized T since `index < self.len` and first
+        //    `self.len` items in `self.buf` are initialized (see INVARIANTS in struct definition)
         unsafe { Some(&*ptr) }
+    }
+
+    /// Overwrite location at `index` in `self.buf` with `val` without reading or dropping the old value.
+    ///
+    /// # SAFETY
+    ///
+    /// * `index < self.cap`
+    /// * item at `index` must be valid to be written to
+    /// * item at `index` should be uninitialized or an old sentinel value,
+    ///   otherwise it would be leaked
+    unsafe fn write_at(&mut self, index: usize, val: T) {
+        // SAFETY: index is in bounds
+        let ptr = unsafe { self.get_raw_unchecked(index) };
+        // SAFETY:
+        //  * get_raw_unchecked return non-null and properly aligned pointers into self.buf
+        //  * any references given out before are invalidated by taking
+        //    `&mut self` (all returned references are bound to a borrow of `self`)
+        unsafe { ptr.write(val) };
+    }
+
+    /// Read the item at `index`.
+    ///
+    /// # SAFETY
+    ///
+    /// * item at `index` must be valid to be read
+    /// * item at `index` must never be read from again
+    unsafe fn read_at(&mut self, index: usize) -> T {
+        // SAFETY: index is in bounds
+        let ptr = unsafe { self.get_raw_unchecked(index) };
+        // SAFETY:
+        //  * this item will never be read again, only written over
+        //  * `ptr` is valid to be read from
+        //    - get_raw_unchecked return non-null and properly aligned pointers
+        //    - any references given out before are invalidated by taking
+        //      `&mut self` (all returned references are bound to a borrow of `self`)
+        //  * `ptr` points to a properly initialized `T` since first `self.len`
+        //    items in `self.buf` are initialized (see INVARIANTS in struct definition)
+        unsafe { ptr.read() }
     }
 
     #[inline(always)]
@@ -371,6 +522,10 @@ mod tests {
     use std::panic::catch_unwind;
 
     use super::*;
+
+    fn covariant<'a, T>(a: VecDeque2<&'static T>) -> VecDeque2<&'a T> {
+        a
+    }
 
     #[test]
     fn push() {
