@@ -9,10 +9,12 @@ use crate_alloc::alloc;
 
 struct Vec2<T> {
     /// INVARIANTS:
-    ///  * `len <= cap`
+    ///  * `len <= cap <= isize::MAX`
     ///  * first `len` elements in `buf` are initialized
     ///  * `buf` is valid pointer to contiguous memory to store `cap` `T`s
     ///    (`buf` can only be `NonNull::dangling` if `cap == len == 0`)
+    ///  * we never allocate more than `isize::MAX` bytes, that is
+    ///    `cap * mem::size_of::<T>() <= isize::MAX`
     //
     buf: NonNull<T>,
     len: usize,
@@ -116,10 +118,12 @@ impl<T> Vec2<T> {
         assert!(self.len < self.cap);
         // SAFETY:
         //  * self.len < self.cap, is in bounds
-        //  * `ptr` points to the first uninitialized `T` and thus self.len + 1
+        //  * `ptr` points to the first uninitialized `T` and thus `self.len + 1`
         //    first items will be initialized after this write
-        unsafe { self.write_at(self.len, val) };
-        self.len += 1;
+        unsafe {
+            self.write_at(self.len, val);
+            self.set_len(self.len + 1);
+        }
     }
 
     pub fn pop(&mut self) -> Option<T> {
@@ -217,11 +221,31 @@ impl<T> Vec2<T> {
 
         // SAFETY:
         //  * as we moved [index, self.len) items up by one and filled the gap at index,
-        //    self.len + 1 first items are now initialized
-
-        self.len += 1;
+        //    `self.len + 1` first items are now initialized
+        unsafe { self.set_len(self.len + 1) };
 
         Ok(())
+    }
+
+    /// # SAFETY
+    ///
+    ///  * first `new_len` elements in `self.buf` must be properly initialized
+    unsafe fn set_len(&mut self, new_len: usize) {
+        self.len = new_len
+    }
+
+    /// # SAFETY
+    ///
+    /// New buffer must uphold the invariants of our type (see type definition).
+    ///
+    /// This means that:
+    /// * `new_buf` is valid pointer to contiguous memory to store `new_cap` `T`s
+    ///    (it can only be `NonNull::dangling` if `new_cap == self.len == 0`)
+    /// * first `self.len` elements in `new_buf` must be properly initialized
+    /// * `self.len <= new_cap <= isize::MAX`
+    unsafe fn set_buf(&mut self, new_buf: NonNull<T>, new_cap: usize) {
+        self.buf = new_buf;
+        self.cap = new_cap;
     }
 
     #[inline(always)]
@@ -342,8 +366,15 @@ impl<T> Vec2<T> {
         } else {
             // SAFETY:
             //  * we just checked that buf is not null.
-            self.buf = unsafe { NonNull::new_unchecked(buf.cast::<T>()) };
-            self.cap = new_cap;
+            let new_buf = unsafe { NonNull::new_unchecked(buf.cast::<T>()) };
+            // SAFETY:
+            //  * `new_buf` is allocated with Layout::array::<T>(new_cap) which
+            //    is properly aligned (by alloc::alloc) and non-null pointer to
+            //    contiguous memory to store `new_cap` `T`s
+            //  * If there were items in previous buffer, they have all been
+            //    moved into the new buffer.
+            //  * `new_cap <= isize::MAX` because otherwise `Layout::array` would panic
+            unsafe { self.set_buf(new_buf, new_cap) }
         }
     }
 
