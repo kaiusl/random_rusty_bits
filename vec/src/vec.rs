@@ -8,14 +8,13 @@ use core::{fmt, mem, ptr, slice};
 use crate_alloc::alloc;
 
 struct Vec2<T> {
-    /// INVARIANTS:
-    ///  * `len <= cap <= isize::MAX`
-    ///  * first `len` elements in `buf` are initialized
-    ///  * `buf` is valid pointer to contiguous memory to store `cap` `T`s
-    ///    (`buf` can only be `NonNull::dangling` if `cap == len == 0`)
-    ///  * we never allocate more than `isize::MAX` bytes, that is
-    ///    `cap * mem::size_of::<T>() <= isize::MAX`
-    //
+    // INVARIANTS:
+    //  * `len <= cap <= isize::MAX`
+    //  * first `len` elements in `buf` are initialized
+    //  * `buf` is valid pointer to contiguous memory to store `cap` `T`s
+    //    (`buf` can only be `NonNull::dangling` if `cap == len == 0`)
+    //  * we never allocate more than `isize::MAX` bytes, that is
+    //    `cap * mem::size_of::<T>() <= isize::MAX`
     buf: NonNull<T>,
     len: usize,
     cap: usize,

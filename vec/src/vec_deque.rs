@@ -8,12 +8,12 @@ use core::{fmt, mem, ptr, slice};
 use crate_alloc::alloc;
 
 struct VecDeque2<T> {
-    /// INVARIANTS:
-    ///  * `len <= cap` and `head < cap` or if `cap == 0` then `head == len == cap == 0`
-    ///  * `len` contiguous elements are initialized in `buf` starting from `head`
-    ///    (they may wrap around the `buf`) (is there a better way to word this???)
-    ///  * `buf` is valid pointer to contiguous memory to store `cap` `T`s
-    ///    (`buf` can only be `NonNull::dangling` if `cap == len == 0`)
+    // INVARIANTS:
+    //  * `len <= cap` and `head < cap` or if `cap == 0` then `head == len == cap == 0`
+    //  * `len` contiguous elements are initialized in `buf` starting from `head`
+    //    (they may wrap around the `buf`) (is there a better way to word this???)
+    //  * `buf` is valid pointer to contiguous memory to store `cap` `T`s
+    //    (`buf` can only be `NonNull::dangling` if `cap == len == 0`)
     buf: NonNull<T>,
     head: usize,
     len: usize,
