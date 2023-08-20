@@ -6,7 +6,7 @@ use core::alloc::Layout;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::marker::PhantomData;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 use core::{fmt, mem};
 use std::collections::hash_map::RandomState;
 
@@ -25,6 +25,18 @@ enum Bucket<K, V> {
     Occupied((K, V)),
     Empty,
     Deleted,
+}
+
+impl<K, V> Drop for HashMap<K, V> {
+    fn drop(&mut self) {
+        for i in 0..self.cap {
+            let it = unsafe { self.buf.as_ptr().add(i) };
+            unsafe { ptr::drop_in_place(it) };
+        }
+
+        let layout = Self::layout(self.cap);
+        unsafe { alloc::dealloc(self.buf.as_ptr().cast::<u8>(), layout) }
+    }
 }
 
 impl<K, V> Clone for HashMap<K, V>
@@ -98,10 +110,7 @@ where
     }
 }
 
-impl<K, V> HashMap<K, V>
-where
-    K: Hash,
-{
+impl<K, V> HashMap<K, V> {
     const CRIT_LOAD_FACTOR: f64 = 0.7;
     const INITIAL_CAP: usize = 4;
 
@@ -123,10 +132,36 @@ where
         self.len == 0
     }
 
-    pub fn insert(&mut self, key: K, value: V) -> Option<(K, V)>
-    where
-        K: Eq,
-    {
+    #[inline]
+    fn mask(&self) -> usize {
+        self.cap - 1
+    }
+
+    fn get_index(&self, hash: u64) -> usize {
+        debug_assert!(self.cap < isize::MAX as usize);
+        debug_assert!(self.cap.is_power_of_two());
+        // SAFETY: cap <= isize::MAX, hence the result after modulo must be < isize::MAX
+        (hash & self.mask() as u64) as usize
+    }
+
+    fn load_factor(&self) -> f64 {
+        if self.cap == 0 {
+            return f64::INFINITY;
+        }
+
+        self.len as f64 / self.cap as f64
+    }
+
+    fn layout(cap: usize) -> Layout {
+        Layout::array::<Bucket<K, V>>(cap).unwrap()
+    }
+}
+
+impl<K, V> HashMap<K, V>
+where
+    K: Hash + Eq,
+{
+    pub fn insert(&mut self, key: K, value: V) -> Option<(K, V)> {
         if self.load_factor() > Self::CRIT_LOAD_FACTOR {
             self.grow()
         }
@@ -140,10 +175,7 @@ where
     /// * Self must have the capacity for 1 more item
     ///   (ideally we would also not exceed `load_factor > Self::CRIT_LOAD_FACTOR`
     ///   but that's not a safety requirement)
-    unsafe fn insert_unchecked(&mut self, key: K, value: V) -> Option<(K, V)>
-    where
-        K: Eq,
-    {
+    unsafe fn insert_unchecked(&mut self, key: K, value: V) -> Option<(K, V)> {
         let hash = self.hash_key(&key);
         let mut index = self.get_index(hash);
         let mask = self.mask();
@@ -227,18 +259,6 @@ where
         }
     }
 
-    #[inline]
-    fn mask(&self) -> usize {
-        self.cap - 1
-    }
-
-    fn get_index(&self, hash: u64) -> usize {
-        debug_assert!(self.cap < isize::MAX as usize);
-        debug_assert!(self.cap.is_power_of_two());
-        // SAFETY: cap <= isize::MAX, hence the result after modulo must be < isize::MAX
-        (hash & self.mask() as u64) as usize
-    }
-
     fn hash_key<Q>(&self, key: &Q) -> u64
     where
         Q: Hash,
@@ -248,22 +268,7 @@ where
         hasher.finish()
     }
 
-    fn load_factor(&self) -> f64 {
-        if self.cap == 0 {
-            return f64::INFINITY;
-        }
-
-        self.len as f64 / self.cap as f64
-    }
-
-    fn layout(cap: usize) -> Layout {
-        Layout::array::<Bucket<K, V>>(cap).unwrap()
-    }
-
-    fn grow(&mut self)
-    where
-        K: Eq,
-    {
+    fn grow(&mut self) {
         let new_cap = if self.cap == 0 {
             Self::INITIAL_CAP
         } else {
@@ -273,10 +278,7 @@ where
         self.grow_to(new_cap);
     }
 
-    fn grow_to(&mut self, new_cap: usize)
-    where
-        K: Eq,
-    {
+    fn grow_to(&mut self, new_cap: usize) {
         if new_cap <= self.cap {
             return;
         }
