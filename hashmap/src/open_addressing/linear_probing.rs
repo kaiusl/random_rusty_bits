@@ -121,6 +121,7 @@ where
     {
         let hash = self.hash_key(&key);
         let mut index = self.get_index(hash);
+        let mask = self.mask();
 
         loop {
             let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
@@ -136,7 +137,7 @@ where
                     break None;
                 }
             }
-            index = (index + 1) % self.cap;
+            index = (index + 1) & mask;
         }
     }
 
@@ -151,6 +152,7 @@ where
 
         let hash = self.hash_key(key);
         let mut index = self.get_index(hash);
+        let mask = self.mask();
 
         loop {
             let maybe_val = unsafe { &*self.buf.as_ptr().add(index) };
@@ -164,7 +166,7 @@ where
                     break None;
                 }
             }
-            index = (index + 1) % self.cap;
+            index = (index + 1) & mask;
         }
     }
 
@@ -179,6 +181,7 @@ where
 
         let hash = self.hash_key(key);
         let mut index = self.get_index(hash);
+        let mask = self.mask();
         loop {
             let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
             match maybe_val {
@@ -195,14 +198,20 @@ where
                     break None;
                 }
             }
-            index = (index + 1) % self.cap;
+            index = (index + 1) & mask;
         }
+    }
+
+    #[inline]
+    fn mask(&self) -> usize {
+        self.cap - 1
     }
 
     fn get_index(&self, hash: u64) -> usize {
         debug_assert!(self.cap < isize::MAX as usize);
+        debug_assert!(self.cap.is_power_of_two());
         // SAFETY: cap <= isize::MAX, hence the result after modulo must be < isize::MAX
-        (hash % self.cap as u64) as usize
+        (hash & self.mask() as u64) as usize
     }
 
     fn hash_key<Q>(&self, key: &Q) -> u64

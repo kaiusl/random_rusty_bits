@@ -105,10 +105,16 @@ where
         })
     }
 
+    #[inline]
+    fn mask(&self) -> usize {
+        self.cap - 1
+    }
+
     fn get_index(&self, hash: u64) -> usize {
         debug_assert!(self.cap < isize::MAX as usize);
+        debug_assert!(self.cap.is_power_of_two());
         // SAFETY: cap <= isize::MAX, hence the result after modulo must be < isize::MAX
-        (hash % self.cap as u64) as usize
+        (hash & self.mask() as u64) as usize
     }
 
     fn hash_key<Q>(&self, key: &Q) -> u64

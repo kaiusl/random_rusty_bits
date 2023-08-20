@@ -129,6 +129,7 @@ where
     where
         K: Eq,
     {
+        let mask = self.mask();
         let mut index = self.get_index(bucket.hash);
         let mut probe_len = 0usize;
 
@@ -154,9 +155,14 @@ where
                     break None;
                 }
             }
-            index = (index + 1) % self.cap;
+            index = (index + 1) & mask;
             probe_len += 1;
         }
+    }
+
+    #[inline]
+    fn mask(&self) -> usize {
+        self.cap - 1
     }
 
     fn probe_len(&self, orig_index: usize, actual_index: usize) -> usize {
@@ -180,6 +186,8 @@ where
         let hash = self.hash_key(key);
         let mut index = self.get_index(hash);
 
+        let mask = self.mask();
+
         loop {
             let maybe_val = unsafe { &*self.buf.as_ptr().add(index) };
             match maybe_val {
@@ -191,7 +199,7 @@ where
                     break None;
                 }
             }
-            index = (index + 1) % self.cap;
+            index = (index + 1) & mask;
         }
     }
 
@@ -206,6 +214,7 @@ where
 
         let hash = self.hash_key(key);
         let mut index = self.get_index(hash);
+        let mask = self.mask();
         loop {
             let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
             match maybe_val.take() {
@@ -221,7 +230,7 @@ where
                     break None;
                 }
             }
-            index = (index + 1) % self.cap;
+            index = (index + 1) & mask;
         }
     }
 
@@ -231,8 +240,9 @@ where
         let mut index = start_index;
         let mut to_overwrite = unsafe { &mut *self.buf.as_ptr().add(index) };
         *to_overwrite = None;
+        let mask = self.mask();
         loop {
-            index = (index + 1) % self.cap;
+            index = (index + 1) & mask;
             let next = unsafe { &mut *self.buf.as_ptr().add(index) };
             match next {
                 Some(Bucket { key, .. }) => {
@@ -256,8 +266,9 @@ where
 
     fn get_index(&self, hash: u64) -> usize {
         debug_assert!(self.cap < isize::MAX as usize);
+        debug_assert!(self.cap.is_power_of_two());
         // SAFETY: cap <= isize::MAX, hence the result after modulo must be < isize::MAX
-        (hash % self.cap as u64) as usize
+        (hash & (self.mask() as u64)) as usize
     }
 
     fn hash_key<Q>(&self, key: &Q) -> u64
