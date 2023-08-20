@@ -72,6 +72,10 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
+        if self.is_empty() {
+            return None;
+        }
+
         let hash = self.hash_key(key);
         let index = self.get_index(hash);
         let chain = &self.buf[index];
@@ -86,6 +90,10 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
+        if self.is_empty() {
+            return None;
+        }
+
         let hash = self.hash_key(key);
         let index = self.get_index(hash);
         let chain = &mut self.buf[index];
@@ -155,10 +163,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn insert() {
-        let mut m = HashMap::new();
+        let mut m = HashMap::<i32, i32>::new();
+        assert!(m.is_empty());
         m.insert(1, 11);
         assert_eq!(m.len(), 1);
         m.insert(2, 21);
@@ -166,7 +174,7 @@ mod tests {
         m.insert(5, 51);
         assert_eq!(m.len(), 4);
         m.insert(4, 41);
-        println!("{m:#?}");
+        println!("{m:?}");
 
         assert_eq!(m.get(&1), Some((&1, &11)));
         assert_eq!(m.get(&2), Some((&2, &21)));
@@ -182,6 +190,8 @@ mod tests {
     #[test]
     fn remove() {
         let mut m = HashMap::new();
+        assert_eq!(m.remove(&1), None);
+
         m.insert(1, 11);
         m.insert(2, 21);
         m.insert(3, 31);
@@ -204,5 +214,24 @@ mod tests {
         assert_eq!(m.remove(&5), None);
 
         assert!(m.is_empty())
+    }
+
+    #[test]
+    fn get() {
+        let mut m = HashMap::new();
+        assert_eq!(m.get(&1), None);
+
+        m.insert(1, 11);
+        m.insert(2, 21);
+        m.insert(3, 31);
+        m.insert(5, 51);
+        m.insert(4, 41);
+
+        assert_eq!(m.get(&2), Some((&2, &21)));
+        assert_eq!(m.get(&1), Some((&1, &11)));
+        assert_eq!(m.get(&3), Some((&3, &31)));
+        assert_eq!(m.get(&4), Some((&4, &41)));
+        assert_eq!(m.get(&5), Some((&5, &51)));
+        assert_eq!(m.get(&6), None);
     }
 }
