@@ -8,7 +8,7 @@ use std::collections::hash_map::RandomState;
 
 type Chain<K, V> = Vec<(K, V)>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HashMap<K, V> {
     buf: Vec<Chain<K, V>>,
     cap: usize,

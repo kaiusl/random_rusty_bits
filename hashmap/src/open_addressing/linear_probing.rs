@@ -20,11 +20,37 @@ pub struct HashMap<K, V> {
     marker: PhantomData<(K, V)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Bucket<K, V> {
     Occupied((K, V)),
     Empty,
     Deleted,
+}
+
+impl<K, V> Clone for HashMap<K, V>
+where
+    K: Eq + Hash + Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        // TODO: improve it
+        let mut s = Self {
+            buf: NonNull::dangling(),
+            cap: 0,
+            len: 0,
+            hash_builder: self.hash_builder.clone(),
+            marker: self.marker,
+        };
+        s.grow_to(self.cap);
+        for i in 0..self.cap {
+            let it = unsafe { &*self.buf.as_ptr().add(i) };
+            if let Bucket::Occupied((k, v)) = it {
+                s.insert(k.clone(), v.clone());
+            }
+        }
+
+        s
+    }
 }
 
 impl<K, V> fmt::Debug for HashMap<K, V>
@@ -74,8 +100,7 @@ where
 
 impl<K, V> HashMap<K, V>
 where
-    K: Hash + fmt::Debug,
-    V: fmt::Debug,
+    K: Hash,
 {
     const CRIT_LOAD_FACTOR: f64 = 0.7;
     const INITIAL_CAP: usize = 4;

@@ -12,6 +12,7 @@ use std::collections::hash_map::RandomState;
 
 use crate_alloc::alloc;
 
+#[derive(Debug, Clone)]
 struct Bucket<K, V> {
     key: K,
     value: V,
@@ -24,6 +25,32 @@ pub struct HashMap<K, V> {
     len: usize,
     hash_builder: RandomState,
     marker: PhantomData<(K, V)>,
+}
+
+impl<K, V> Clone for HashMap<K, V>
+where
+    K: Eq + Hash + Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        // TODO: improve it
+        let mut s = Self {
+            buf: NonNull::dangling(),
+            cap: 0,
+            len: 0,
+            hash_builder: self.hash_builder.clone(),
+            marker: self.marker,
+        };
+        s.grow_to(self.cap);
+        for i in 0..self.cap {
+            let it = unsafe { &*self.buf.as_ptr().add(i) };
+            if let Some(bucket) = it {
+                unsafe { s.insert_unchecked(bucket.clone()) };
+            }
+        }
+
+        s
+    }
 }
 
 impl<K, V> fmt::Debug for HashMap<K, V>
@@ -83,8 +110,7 @@ where
 
 impl<K, V> HashMap<K, V>
 where
-    K: Hash + fmt::Debug,
-    V: fmt::Debug,
+    K: Hash,
 {
     const CRIT_LOAD_FACTOR: f64 = 0.7;
     const INITIAL_CAP: usize = 4;
