@@ -17,6 +17,7 @@ pub struct HashMap<K, V> {
     cap: usize,
     len: usize,
     hash_builder: RandomState,
+    crit_load_factor: f64,
     marker: PhantomData<(K, V)>,
 }
 
@@ -50,6 +51,7 @@ where
             buf: NonNull::dangling(),
             cap: 0,
             len: 0,
+            crit_load_factor: self.crit_load_factor,
             hash_builder: self.hash_builder.clone(),
             marker: self.marker,
         };
@@ -120,6 +122,18 @@ impl<K, V> HashMap<K, V> {
             cap: 0,
             len: 0,
             hash_builder: RandomState::new(),
+            crit_load_factor: Self::CRIT_LOAD_FACTOR,
+            marker: PhantomData,
+        }
+    }
+
+    pub fn with_load_factor(lf: f64) -> Self {
+        Self {
+            buf: NonNull::dangling(),
+            cap: 0,
+            len: 0,
+            hash_builder: RandomState::new(),
+            crit_load_factor: lf,
             marker: PhantomData,
         }
     }
@@ -162,7 +176,7 @@ where
     K: Hash + Eq,
 {
     pub fn insert(&mut self, key: K, value: V) -> Option<(K, V)> {
-        if self.load_factor() > Self::CRIT_LOAD_FACTOR {
+        if self.load_factor() > self.crit_load_factor {
             self.grow()
         }
 
