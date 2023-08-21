@@ -252,8 +252,8 @@ where
 
         let hash = self.hash_key(key);
         let mut index = self.get_index(hash);
-
         let mask = self.mask();
+        let mut probe_len = 0;
 
         loop {
             let maybe_val = unsafe { &*self.buf.as_ptr().add(index) };
@@ -261,12 +261,20 @@ where
                 Some(b) if b.key.borrow() == key => {
                     break Some((&b.key, &b.value));
                 }
-                Some(_) => {}
+                Some(val) => {
+                    let this_index = self.get_index(val.hash);
+                    let this_probe_len = self.probe_len(this_index, index);
+
+                    if this_probe_len < probe_len {
+                        break None;
+                    }
+                }
                 None => {
                     break None;
                 }
             }
             index = (index + 1) & mask;
+            probe_len += 1;
         }
     }
 
