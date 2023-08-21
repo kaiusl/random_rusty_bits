@@ -1,19 +1,19 @@
 use core::hint::black_box;
+use core::time::Duration;
 use std::collections::{HashMap, HashSet};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hashmap::open_addressing::{linear_probing, robin_hood};
-use rand::distributions::uniform::SampleUniform;
 use rand::seq::IteratorRandom;
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 fn insert(c: &mut Criterion) {
     let mut g = c.benchmark_group("insert_new");
 
     macro_rules! bench {
-        ($name:expr, $count:expr, $keys:expr, $($map:tt)*) => {
-            g.bench_function(BenchmarkId::new($name, $count), |b| {
+        (new $name:expr, $count:expr, $keys:expr, $($map:tt)*) => {
+            g.bench_with_input(BenchmarkId::new($name, $count), &$count, |b, _i| {
                 b.iter(|| {
                     let mut map = $($map)*::new();
                     for x in $keys {
@@ -23,78 +23,160 @@ fn insert(c: &mut Criterion) {
                 })
             });
         };
+        (lf $name:expr, $count:expr, $keys:expr, $lf:expr, $($map:tt)*) => {
+            g.bench_with_input(BenchmarkId::new(format!("{}_{}", $name, $lf), $count), &$count, |b, _i| {
+                b.iter(|| {
+                    let mut map = $($map)*::with_load_factor($lf);
+                    for x in $keys {
+                        map.insert(x, x);
+                    }
+                    map
+                })
+            });
+        };
     }
-
-    for count in [100, 10_000] {
+    let mut count = 1000;
+    for _ in 0..40 {
         let keys = gen_unique_keys_int(count, true, i32::MAX / 2)
             .into_iter()
             .collect::<Vec<_>>();
         let keys = keys.iter().copied();
-        bench!("std", count, keys.clone(), HashMap);
+        bench!(new "std", count, keys.clone(), HashMap);
+        for lf in [0.7, 0.9, 0.99] {
+            bench!(
+                lf "linear_probing",
+                count,
+                keys.clone(),
+                lf,
+                linear_probing::HashMap
+            );
+            bench!(lf "robin_hood", count, keys.clone(), lf, robin_hood::HashMap);
+        }
+
         bench!(
-            "linear_probing",
-            count,
-            keys.clone(),
-            linear_probing::HashMap
-        );
-        bench!("robin_hood", count, keys.clone(), robin_hood::HashMap);
-        bench!(
-            "chaining_vecs",
+            new "chaining_vecs",
             count,
             keys.clone(),
             hashmap::chaining::vecs::HashMap
         );
+        count = (count as f64 * 1.05) as usize;
     }
+}
+
+macro_rules! bench_get {
+    (new $g:expr, $name:expr, $count:expr, $keys:expr,  $access_keys:expr, $($map:tt)*) => {
+        let mut map = $($map)*::new();
+        for x in $keys {
+            map.insert(x, x);
+        }
+
+        $g.bench_with_input(BenchmarkId::new($name, $count), &$count, |b, _c| {
+            b.iter(|| {
+                for k in $access_keys.iter() {
+                    black_box(map.get(black_box(k)));
+                }
+            })
+        });
+
+    };
+    (lf $g:expr, $name:expr, $count:expr, $keys:expr,  $access_keys:expr,  $lf:expr, $($map:tt)*) => {
+        let mut map = $($map)*::with_load_factor($lf);
+        for x in $keys {
+            map.insert(x, x);
+        }
+
+        $g.bench_with_input(BenchmarkId::new(format!("{}_{}", $name, $lf), $count), &$count, |b, _c| {
+            b.iter(|| {
+                for k in $access_keys.iter() {
+                    black_box(map.get(black_box(k)));
+                }
+            })
+        });
+
+    };
 }
 
 fn get(c: &mut Criterion) {
     let mut g = c.benchmark_group("get");
 
-    macro_rules! bench {
-        ($name:expr, $count:expr, $keys:expr, $access_keys:expr, $($map:tt)*) => {
-            let mut map = $($map)*::new();
-            for x in $keys {
-                map.insert(x, x);
-            }
-
-            g.bench_function(BenchmarkId::new($name, $count), |b| {
-                b.iter(|| {
-                    for k in $access_keys.iter() {
-                        black_box(map.get(black_box(k)));
-                    }
-                })
-            });
-
-        };
-    }
-
-    for count in [1000, 10_000, 100_000] {
+    let mut count = 1000;
+    for _ in 0..40 {
         let keys = gen_unique_keys_int(count, true, i32::MAX / 2);
         let keys = keys.iter().copied();
         let access_keys = sample_nonoverlapping_keys_valid(keys.clone(), count);
 
-        bench!("std", count, keys.clone(), access_keys, HashMap);
-        bench!(
-            "linear_probing",
-            count,
-            keys.clone(),
-            access_keys,
-            linear_probing::HashMap
-        );
-        bench!(
-            "robin_hood",
-            count,
-            keys.clone(),
-            access_keys,
-            robin_hood::HashMap
-        );
-        bench!(
+        bench_get!(new g, "std", count, keys.clone(), access_keys, HashMap);
+        for lf in [0.7, 0.9, 0.99] {
+            bench_get!(lf
+                g,
+                "linear_probing",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                linear_probing::HashMap
+            );
+            bench_get!(lf
+                g,
+                "robin_hood",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                robin_hood::HashMap
+            );
+        }
+        bench_get!(new
+            g,
             "chaining_vecs",
             count,
             keys.clone(),
             access_keys,
             hashmap::chaining::vecs::HashMap
         );
+        count = (count as f64 * 1.05) as usize;
+    }
+}
+
+fn get_non_existing(c: &mut Criterion) {
+    let mut g = c.benchmark_group("get_non_existing");
+
+    let mut count = 1000;
+    for _ in 0..40 {
+        let keys = gen_unique_keys_int(count, true, i32::MAX / 2);
+        let access_keys = sample_nonoverlapping_keys_invalid(&keys, count);
+        let keys = keys.iter().copied();
+
+        bench_get!(new g, "std", count, keys.clone(), access_keys, HashMap);
+        for lf in [0.7, 0.9, 0.99] {
+            bench_get!(lf
+                g,
+                "linear_probing",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                linear_probing::HashMap
+            );
+            bench_get!(lf
+                g,
+                "robin_hood",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                robin_hood::HashMap
+            );
+        }
+        bench_get!(new
+            g,
+            "chaining_vecs",
+            count,
+            keys.clone(),
+            access_keys,
+            hashmap::chaining::vecs::HashMap
+        );
+        count = (count as f64 * 1.05) as usize;
     }
 }
 
@@ -108,7 +190,7 @@ fn remove(c: &mut Criterion) {
                 map.insert(x, x);
             }
 
-            g.bench_function(BenchmarkId::new($name, $count), |b| {
+            g.bench_with_input(BenchmarkId::new($name, $count), &$count, |b, _i| {
                 b.iter_batched_ref(
                     || map.clone(),
                     |map| {
@@ -119,30 +201,53 @@ fn remove(c: &mut Criterion) {
                     criterion::BatchSize::SmallInput,
                 );
             });
+        };
+        (lf $name:expr, $count:expr, $keys:expr, $access_keys:expr, $lf:expr, $($map:tt)*) => {
+            let mut map = $($map)*::with_load_factor($lf);
+            for x in $keys {
+                map.insert(x, x);
+            }
 
+            g.bench_with_input(BenchmarkId::new(format!("{}_{}", $name, $lf), $count), &$count, |b, _i| {
+                b.iter_batched_ref(
+                    || map.clone(),
+                    |map| {
+                        for k in $access_keys.iter() {
+                            black_box(map.remove(black_box(k)));
+                        }
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            });
         };
     }
 
-    for count in [1000, 10_000] {
+    let mut count = 1000;
+    for _ in 0..40 {
         let keys = gen_unique_keys_int(count, true, i32::MAX / 2);
         let keys = keys.iter().copied();
         let access_keys = sample_nonoverlapping_keys_valid(keys.clone(), count);
 
         bench!("std", count, keys.clone(), access_keys, HashMap);
-        bench!(
-            "linear_probing",
-            count,
-            keys.clone(),
-            access_keys,
-            linear_probing::HashMap
-        );
-        bench!(
-            "robin_hood",
-            count,
-            keys.clone(),
-            access_keys,
-            robin_hood::HashMap
-        );
+        for lf in [0.7, 0.9, 0.99] {
+            bench!(
+                lf
+                "linear_probing",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                linear_probing::HashMap
+            );
+            bench!(lf
+                "robin_hood",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                robin_hood::HashMap
+            );
+        }
         bench!(
             "chaining_vecs",
             count,
@@ -150,6 +255,7 @@ fn remove(c: &mut Criterion) {
             access_keys,
             hashmap::chaining::vecs::HashMap
         );
+        count = (count as f64 * 1.05) as usize;
     }
 }
 
@@ -175,5 +281,29 @@ where
     keys.choose_multiple(&mut index_gen, count)
 }
 
-criterion_group!(benches, insert, get, remove);
+pub fn sample_nonoverlapping_keys_invalid(keys: &HashSet<i32>, count: usize) -> HashSet<i32> {
+    let mut set = HashSet::with_capacity(count);
+    let mut rng = ChaCha8Rng::seed_from_u64(456);
+
+    loop {
+        let key: i32 = rng.gen();
+        if keys.contains(&key) {
+            continue;
+        }
+        set.insert(key);
+
+        if set.len() == count {
+            break;
+        }
+    }
+
+    assert_eq!(set.len(), count);
+    set
+}
+
+criterion_group!(
+    name = benches;
+    config = Criterion::default().measurement_time(Duration::from_secs(1)).warm_up_time(Duration::from_millis(100));
+    targets = get, get_non_existing, insert, remove
+);
 criterion_main!(benches);
