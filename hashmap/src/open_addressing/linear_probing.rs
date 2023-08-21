@@ -15,6 +15,7 @@ use crate_alloc::alloc;
 pub struct HashMap<K, V> {
     buf: NonNull<Bucket<K, V>>,
     cap: usize,
+    index_mask: usize,
     len: usize,
     hash_builder: RandomState,
     crit_load_factor: f64,
@@ -50,6 +51,7 @@ where
         let mut s = Self {
             buf: NonNull::dangling(),
             cap: 0,
+            index_mask: 0,
             len: 0,
             crit_load_factor: self.crit_load_factor,
             hash_builder: self.hash_builder.clone(),
@@ -113,24 +115,18 @@ where
 }
 
 impl<K, V> HashMap<K, V> {
-    const CRIT_LOAD_FACTOR: f64 = 0.7;
+    const DEF_CRIT_LOAD_FACTOR: f64 = 0.7;
     const INITIAL_CAP: usize = 4;
 
     pub fn new() -> Self {
-        Self {
-            buf: NonNull::dangling(),
-            cap: 0,
-            len: 0,
-            hash_builder: RandomState::new(),
-            crit_load_factor: Self::CRIT_LOAD_FACTOR,
-            marker: PhantomData,
-        }
+        Self::with_load_factor(Self::DEF_CRIT_LOAD_FACTOR)
     }
 
     pub fn with_load_factor(lf: f64) -> Self {
         Self {
             buf: NonNull::dangling(),
             cap: 0,
+            index_mask: 0,
             len: 0,
             hash_builder: RandomState::new(),
             crit_load_factor: lf,
@@ -146,16 +142,11 @@ impl<K, V> HashMap<K, V> {
         self.len == 0
     }
 
-    #[inline]
-    fn mask(&self) -> usize {
-        self.cap - 1
-    }
-
-    fn get_index(&self, hash: u64) -> usize {
+    fn preferred_index(&self, hash: u64) -> usize {
         debug_assert!(self.cap < isize::MAX as usize);
         debug_assert!(self.cap.is_power_of_two());
         // SAFETY: cap <= isize::MAX, hence the result after modulo must be < isize::MAX
-        (hash & self.mask() as u64) as usize
+        (hash & self.index_mask as u64) as usize
     }
 
     fn load_factor(&self) -> f64 {
@@ -191,8 +182,7 @@ where
     ///   but that's not a safety requirement)
     unsafe fn insert_unchecked(&mut self, key: K, value: V) -> Option<(K, V)> {
         let hash = self.hash_key(&key);
-        let mut index = self.get_index(hash);
-        let mask = self.mask();
+        let mut index = self.preferred_index(hash);
 
         loop {
             let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
@@ -208,7 +198,7 @@ where
                     break None;
                 }
             }
-            index = (index + 1) & mask;
+            index = (index + 1) & self.index_mask;
         }
     }
 
@@ -222,22 +212,16 @@ where
         }
 
         let hash = self.hash_key(key);
-        let mut index = self.get_index(hash);
-        let mask = self.mask();
+        let mut index = self.preferred_index(hash);
 
         loop {
             let maybe_val = unsafe { &*self.buf.as_ptr().add(index) };
             match maybe_val {
-                Bucket::Occupied((ref k, ref v)) if k.borrow() == key => {
-                    break Some((k, v));
-                }
-
+                Bucket::Occupied((ref k, ref v)) if k.borrow() == key => break Some((k, v)),
                 Bucket::Occupied(_) | Bucket::Deleted => {}
-                Bucket::Empty => {
-                    break None;
-                }
+                Bucket::Empty => break None,
             }
-            index = (index + 1) & mask;
+            index = (index + 1) & self.index_mask;
         }
     }
 
@@ -251,8 +235,7 @@ where
         }
 
         let hash = self.hash_key(key);
-        let mut index = self.get_index(hash);
-        let mask = self.mask();
+        let mut index = self.preferred_index(hash);
         loop {
             let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
             match maybe_val {
@@ -265,11 +248,9 @@ where
                     }
                 }
                 Bucket::Occupied(_) | Bucket::Deleted => {}
-                Bucket::Empty => {
-                    break None;
-                }
+                Bucket::Empty => break None,
             }
-            index = (index + 1) & mask;
+            index = (index + 1) & self.index_mask;
         }
     }
 
@@ -292,59 +273,42 @@ where
         self.grow_to(new_cap);
     }
 
+    /// # PANICS
+    ///
+    /// * if `new_cap` is not power of two
     fn grow_to(&mut self, new_cap: usize) {
+        assert!(new_cap.is_power_of_two());
         if new_cap <= self.cap {
             return;
         }
 
-        let old_layout = Self::layout(self.cap);
-        let new_layout = Self::layout(new_cap);
+        // SAFETY: TODO
+        let new_buf = unsafe { Self::alloc_new_buf_initialized(new_cap) };
+        let (old_buf, old_cap) = unsafe { self.swap_buf(new_buf, new_cap) };
 
-        let new_buf = unsafe { alloc::alloc(new_layout) };
-
-        if new_buf.is_null() {
-            alloc::handle_alloc_error(new_layout);
-        } else {
-            let new_buf = new_buf.cast::<Bucket<K, V>>();
-            // init to `None`s
-            for i in 0..new_cap {
-                unsafe { new_buf.add(i).write(Bucket::Empty) };
-            }
-
-            let new_buf = unsafe { NonNull::new_unchecked(new_buf) };
-            let old_buf = mem::replace(&mut self.buf, new_buf).as_ptr();
-            let old_cap = mem::replace(&mut self.cap, new_cap);
-            self.len = 0;
-
-            // insert all items into the new buffer
-            for i in 0..old_cap {
-                let it = unsafe { old_buf.add(i).read() };
-                match it {
-                    Bucket::Occupied((k, v)) => {
-                        unsafe { self.insert_unchecked(k, v) };
-                    }
-                    _ => continue,
-                }
-            }
-
-            if old_cap != 0 {
-                // drop old buffer
-                unsafe { alloc::dealloc(old_buf.cast::<u8>(), old_layout) }
-            }
+        if old_cap != 0 {
+            // drop old buffer
+            let old_layout = Self::layout(self.cap);
+            unsafe { alloc::dealloc(old_buf.as_ptr().cast::<u8>(), old_layout) }
         }
     }
 
-    fn grow_empty_to(&mut self, new_cap: usize) {
-        assert!(self.len == 0);
-        if new_cap <= self.cap {
-            return;
-        }
-
-        let old_layout = Self::layout(self.cap);
+    /// Allocates new buffer with capacity `new_cap` and initializes all the values to `None`.
+    ///
+    /// # SAFETY
+    ///
+    /// * `new_cap > 0`
+    ///
+    /// # ABORTS
+    ///
+    /// * if allocation fails
+    ///
+    /// # PANICS
+    ///
+    /// * if `new_cap * mem::size_of::<Option<Bucket<K, V>>>() > isize::MAX`
+    unsafe fn alloc_new_buf_initialized(new_cap: usize) -> NonNull<Bucket<K, V>> {
         let new_layout = Self::layout(new_cap);
-
         let new_buf = unsafe { alloc::alloc(new_layout) };
-
         if new_buf.is_null() {
             alloc::handle_alloc_error(new_layout);
         } else {
@@ -354,15 +318,38 @@ where
                 unsafe { new_buf.add(i).write(Bucket::Empty) };
             }
 
-            let new_buf = unsafe { NonNull::new_unchecked(new_buf) };
-            let old_buf = mem::replace(&mut self.buf, new_buf).as_ptr();
-            let old_cap = mem::replace(&mut self.cap, new_cap);
+            unsafe { NonNull::new_unchecked(new_buf) }
+        }
+    }
 
-            if old_cap != 0 {
-                // drop old buffer
-                unsafe { alloc::dealloc(old_buf.cast::<u8>(), old_layout) }
+    /// Swap current buffer with new one by moving all the items from old buffer into new
+    ///
+    /// # SAFETY
+    ///
+    /// * `new_buf` must have capacity `new_cap` and all the values must be initialized to `None`
+    /// * `new_cap >= self.cap`
+    unsafe fn swap_buf(
+        &mut self,
+        new_buf: NonNull<Bucket<K, V>>,
+        new_cap: usize,
+    ) -> (NonNull<Bucket<K, V>>, usize) {
+        let old_buf = mem::replace(&mut self.buf, new_buf);
+        let old_cap = mem::replace(&mut self.cap, new_cap);
+        self.index_mask = self.cap - 1;
+        self.len = 0;
+
+        // insert all items into the new buffer
+        for i in 0..old_cap {
+            let it = unsafe { old_buf.as_ptr().add(i).read() };
+            match it {
+                Bucket::Occupied((k, v)) => {
+                    unsafe { self.insert_unchecked(k, v) };
+                }
+                _ => continue,
             }
         }
+
+        (old_buf, old_cap)
     }
 }
 

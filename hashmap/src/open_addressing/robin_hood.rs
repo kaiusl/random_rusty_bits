@@ -12,16 +12,19 @@ use std::collections::hash_map::RandomState;
 
 use crate_alloc::alloc;
 
+type HashValue = u64;
+
 #[derive(Debug, Clone)]
 struct Bucket<K, V> {
     key: K,
     value: V,
-    hash: u64,
+    hash: HashValue,
 }
 
 pub struct HashMap<K, V> {
     buf: NonNull<Option<Bucket<K, V>>>,
     cap: usize,
+    index_mask: usize,
     len: usize,
     hash_builder: RandomState,
     crit_load_factor: f64,
@@ -50,6 +53,7 @@ where
         let mut s = Self {
             buf: NonNull::dangling(),
             cap: 0,
+            index_mask: 0,
             len: 0,
             crit_load_factor: self.crit_load_factor,
             hash_builder: self.hash_builder.clone(),
@@ -92,22 +96,13 @@ where
     V: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn hash_key<Q>(hash_builder: &RandomState, key: &Q) -> u64
-        where
-            Q: Hash,
-        {
-            let mut hasher = hash_builder.build_hasher();
-            key.hash(&mut hasher);
-            hasher.finish()
-        }
-
         let mut list = f.debug_list();
 
         for i in 0..self.map.cap {
             let it = unsafe { &*self.map.buf.as_ptr().add(i) };
             let it = it.as_ref().map(|b| {
                 let hash = self.map.hash_key(&b.key);
-                let orig_index = self.map.get_index(hash);
+                let orig_index = self.map.preferred_index(hash);
                 (
                     &b.key,
                     &b.value,
@@ -123,24 +118,18 @@ where
 }
 
 impl<K, V> HashMap<K, V> {
-    const CRIT_LOAD_FACTOR: f64 = 0.7;
+    const DEF_CRIT_LOAD_FACTOR: f64 = 0.7;
     const INITIAL_CAP: usize = 4;
 
     pub fn new() -> Self {
-        Self {
-            buf: NonNull::dangling(),
-            cap: 0,
-            len: 0,
-            hash_builder: RandomState::new(),
-            crit_load_factor: Self::CRIT_LOAD_FACTOR,
-            marker: PhantomData,
-        }
+        Self::with_load_factor(Self::DEF_CRIT_LOAD_FACTOR)
     }
 
     pub fn with_load_factor(lf: f64) -> Self {
         Self {
             buf: NonNull::dangling(),
             cap: 0,
+            index_mask: 0,
             len: 0,
             hash_builder: RandomState::new(),
             crit_load_factor: lf,
@@ -156,11 +145,6 @@ impl<K, V> HashMap<K, V> {
         self.len == 0
     }
 
-    #[inline]
-    fn mask(&self) -> usize {
-        self.cap - 1
-    }
-
     fn probe_len(&self, orig_index: usize, actual_index: usize) -> usize {
         if actual_index < orig_index {
             // probe must wrap around
@@ -170,11 +154,11 @@ impl<K, V> HashMap<K, V> {
         }
     }
 
-    fn get_index(&self, hash: u64) -> usize {
+    fn preferred_index(&self, hash: u64) -> usize {
         debug_assert!(self.cap < isize::MAX as usize);
         debug_assert!(self.cap.is_power_of_two());
         // SAFETY: cap <= isize::MAX, hence the result after modulo must be < isize::MAX
-        (hash & (self.mask() as u64)) as usize
+        (hash & (self.index_mask as u64)) as usize
     }
 
     fn load_factor(&self) -> f64 {
@@ -210,8 +194,7 @@ where
     ///   (ideally we would also not exceed `load_factor > Self::CRIT_LOAD_FACTOR`
     ///   but that's not a safety requirement)
     unsafe fn insert_unchecked(&mut self, mut bucket: Bucket<K, V>) -> Option<(K, V)> {
-        let mask = self.mask();
-        let mut index = self.get_index(bucket.hash);
+        let mut index = self.preferred_index(bucket.hash);
         let mut probe_len = 0usize;
 
         loop {
@@ -222,7 +205,7 @@ where
                     break Some((old.key, old.value));
                 }
                 Some(val) => {
-                    let this_index = self.get_index(val.hash);
+                    let this_index = self.preferred_index(val.hash);
                     let this_probe_len = self.probe_len(this_index, index);
 
                     if probe_len > this_probe_len {
@@ -236,12 +219,12 @@ where
                     break None;
                 }
             }
-            index = (index + 1) & mask;
+            index = (index + 1) & self.index_mask;
             probe_len += 1;
         }
     }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Option<(&K, &V)>
+    pub fn get<Q>(&self, key: &Q) -> Option<(&K, &V)>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
@@ -251,29 +234,24 @@ where
         }
 
         let hash = self.hash_key(key);
-        let mut index = self.get_index(hash);
-        let mask = self.mask();
+        let mut index = self.preferred_index(hash);
         let mut probe_len = 0;
 
         loop {
             let maybe_val = unsafe { &*self.buf.as_ptr().add(index) };
             match maybe_val {
-                Some(b) if b.key.borrow() == key => {
-                    break Some((&b.key, &b.value));
-                }
-                Some(val) => {
-                    let this_index = self.get_index(val.hash);
+                Some(b) if b.key.borrow() == key => break Some((&b.key, &b.value)),
+                Some(Bucket { hash, .. }) => {
+                    let this_index = self.preferred_index(*hash);
                     let this_probe_len = self.probe_len(this_index, index);
 
                     if this_probe_len < probe_len {
                         break None;
                     }
                 }
-                None => {
-                    break None;
-                }
+                None => break None,
             }
-            index = (index + 1) & mask;
+            index = (index + 1) & self.index_mask;
             probe_len += 1;
         }
     }
@@ -288,24 +266,22 @@ where
         }
 
         let hash = self.hash_key(key);
-        let mut index = self.get_index(hash);
-        let mask = self.mask();
+        let mut index = self.preferred_index(hash);
         loop {
             let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
-            match maybe_val.take() {
+            match maybe_val {
                 Some(b) if b.key.borrow() == key => {
+                    let b = maybe_val.take().unwrap();
                     self.shift_probe_chain_down(index);
                     self.len -= 1;
                     break Some((b.key, b.value));
                 }
-                val @ Some(_) => {
-                    *maybe_val = val;
-                }
+                Some(_) => {}
                 None => {
                     break None;
                 }
             }
-            index = (index + 1) & mask;
+            index = (index + 1) & self.index_mask;
         }
     }
 
@@ -315,13 +291,12 @@ where
         let mut index = start_index;
         let mut to_overwrite = unsafe { &mut *self.buf.as_ptr().add(index) };
         *to_overwrite = None;
-        let mask = self.mask();
         loop {
-            index = (index + 1) & mask;
+            index = (index + 1) & self.index_mask;
             let next = unsafe { &mut *self.buf.as_ptr().add(index) };
             match next {
                 Some(Bucket { key, .. }) => {
-                    let preferred_index = self.get_index(self.hash_key(&key));
+                    let preferred_index = self.preferred_index(self.hash_key(&key));
                     if preferred_index != index {
                         *to_overwrite = next.take();
                         to_overwrite = next;
@@ -358,16 +333,42 @@ where
         self.grow_to(new_cap);
     }
 
+    /// # PANICS
+    ///
+    /// * if `new_cap` is not power of two
     fn grow_to(&mut self, new_cap: usize) {
+        assert!(new_cap.is_power_of_two());
         if new_cap <= self.cap {
             return;
         }
 
-        let old_layout = Self::layout(self.cap);
+        // SAFETY: TODO
+        let new_buf = unsafe { Self::alloc_new_buf_initialized(new_cap) };
+        let (old_buf, old_cap) = unsafe { self.swap_buf(new_buf, new_cap) };
+
+        if old_cap != 0 {
+            // drop old buffer
+            let old_layout = Self::layout(self.cap);
+            unsafe { alloc::dealloc(old_buf.as_ptr().cast::<u8>(), old_layout) }
+        }
+    }
+
+    /// Allocates new buffer with capacity `new_cap` and initializes all the values to `None`.
+    ///
+    /// # SAFETY
+    ///
+    /// * `new_cap > 0`
+    ///
+    /// # ABORTS
+    ///
+    /// * if allocation fails
+    ///
+    /// # PANICS
+    ///
+    /// * if `new_cap * mem::size_of::<Option<Bucket<K, V>>>() > isize::MAX`
+    unsafe fn alloc_new_buf_initialized(new_cap: usize) -> NonNull<Option<Bucket<K, V>>> {
         let new_layout = Self::layout(new_cap);
-
         let new_buf = unsafe { alloc::alloc(new_layout) };
-
         if new_buf.is_null() {
             alloc::handle_alloc_error(new_layout);
         } else {
@@ -377,27 +378,38 @@ where
                 unsafe { new_buf.add(i).write(None) };
             }
 
-            let new_buf = unsafe { NonNull::new_unchecked(new_buf) };
-            let old_buf = mem::replace(&mut self.buf, new_buf).as_ptr();
-            let old_cap = mem::replace(&mut self.cap, new_cap);
-            self.len = 0;
+            unsafe { NonNull::new_unchecked(new_buf) }
+        }
+    }
 
-            // insert all items into the new buffer
-            for i in 0..old_cap {
-                let it = unsafe { old_buf.add(i).read() };
-                match it {
-                    Some(b) => {
-                        unsafe { self.insert_unchecked(b) };
-                    }
-                    None => continue,
+    /// Swap current buffer with new one by moving all the items from old buffer into new
+    ///
+    /// # SAFETY
+    ///
+    /// * `new_buf` must have capacity `new_cap` and all the values must be initialized to `None`
+    /// * `new_cap >= self.cap`
+    unsafe fn swap_buf(
+        &mut self,
+        new_buf: NonNull<Option<Bucket<K, V>>>,
+        new_cap: usize,
+    ) -> (NonNull<Option<Bucket<K, V>>>, usize) {
+        let old_buf = mem::replace(&mut self.buf, new_buf);
+        let old_cap = mem::replace(&mut self.cap, new_cap);
+        self.index_mask = self.cap - 1;
+        self.len = 0;
+
+        // insert all items into the new buffer
+        for i in 0..old_cap {
+            let it = unsafe { old_buf.as_ptr().add(i).read() };
+            match it {
+                Some(b) => {
+                    unsafe { self.insert_unchecked(b) };
                 }
-            }
-
-            if old_cap != 0 {
-                // drop old buffer
-                unsafe { alloc::dealloc(old_buf.cast::<u8>(), old_layout) }
+                None => continue,
             }
         }
+
+        (old_buf, old_cap)
     }
 }
 
