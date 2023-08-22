@@ -207,21 +207,12 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
-        if self.is_empty() {
-            return None;
-        }
-
-        let hash = self.hash_key(key);
-        let mut index = self.preferred_index(hash);
-
-        loop {
-            let maybe_val = unsafe { &*self.buf.as_ptr().add(index) };
-            match maybe_val {
-                Bucket::Occupied((ref k, ref v)) if k.borrow() == key => break Some((k, v)),
-                Bucket::Occupied(_) | Bucket::Deleted => {}
-                Bucket::Empty => break None,
-            }
-            index = (index + 1) & self.index_mask;
+        match self.get_bucket(key) {
+            Some(b) => match unsafe { &*b } {
+                Bucket::Occupied((k, v)) => Some((k, v)),
+                _ => unreachable!(),
+            },
+            None => None,
         }
     }
 
@@ -230,23 +221,35 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + fmt::Debug,
     {
+        match self.get_bucket(key) {
+            Some(b) => {
+                let b = unsafe { ptr::replace(b, Bucket::Deleted) };
+                self.len -= 1;
+                match b {
+                    Bucket::Occupied((k, v)) => Some((k, v)),
+                    _ => unreachable!(),
+                }
+            }
+            None => None,
+        }
+    }
+
+    fn get_bucket<Q>(&mut self, key: &Q) -> Option<*mut Bucket<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash,
+    {
         if self.is_empty() {
             return None;
         }
 
         let hash = self.hash_key(key);
         let mut index = self.preferred_index(hash);
+
         loop {
-            let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
-            match maybe_val {
-                Bucket::Occupied((ref k, _)) if k.borrow() == key => {
-                    let old = mem::replace(maybe_val, Bucket::Deleted);
-                    self.len -= 1;
-                    match old {
-                        Bucket::Occupied(old) => break Some(old),
-                        _ => unreachable!(),
-                    }
-                }
+            let maybe_val = unsafe { self.buf.as_ptr().add(index) };
+            match unsafe { &*maybe_val } {
+                Bucket::Occupied((ref k, _)) if k.borrow() == key => break Some(maybe_val),
                 Bucket::Occupied(_) | Bucket::Deleted => {}
                 Bucket::Empty => break None,
             }

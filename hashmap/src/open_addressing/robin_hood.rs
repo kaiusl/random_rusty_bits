@@ -229,6 +229,33 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
+        match self.get_bucket(key) {
+            Some((b, _)) => unsafe { &*b }.as_ref().map(|b| (&b.key, &b.value)),
+            None => None,
+        }
+    }
+
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + fmt::Debug,
+    {
+        match self.get_bucket(key) {
+            Some((bucket, index)) => {
+                let b = unsafe { ptr::replace(bucket, None) }.unwrap();
+                self.shift_probe_chain_down(index);
+                self.len -= 1;
+                Some((b.key, b.value))
+            }
+            None => None,
+        }
+    }
+
+    fn get_bucket<Q>(&self, key: &Q) -> Option<(*mut Option<Bucket<K, V>>, usize)>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash,
+    {
         if self.is_empty() {
             return None;
         }
@@ -238,9 +265,9 @@ where
         let mut probe_len = 0;
 
         loop {
-            let maybe_val = unsafe { &*self.buf.as_ptr().add(index) };
-            match maybe_val {
-                Some(b) if b.key.borrow() == key => break Some((&b.key, &b.value)),
+            let maybe_val = unsafe { self.buf.as_ptr().add(index) };
+            match unsafe { &*maybe_val } {
+                Some(b) if b.key.borrow() == key => break Some((maybe_val, index)),
                 Some(Bucket { hash, .. }) => {
                     let this_index = self.preferred_index(*hash);
                     let this_probe_len = self.probe_len(this_index, index);
@@ -253,35 +280,6 @@ where
             }
             index = (index + 1) & self.index_mask;
             probe_len += 1;
-        }
-    }
-
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<(K, V)>
-    where
-        K: Borrow<Q>,
-        Q: Eq + Hash + fmt::Debug,
-    {
-        if self.is_empty() {
-            return None;
-        }
-
-        let hash = self.hash_key(key);
-        let mut index = self.preferred_index(hash);
-        loop {
-            let maybe_val = unsafe { &mut *self.buf.as_ptr().add(index) };
-            match maybe_val {
-                Some(b) if b.key.borrow() == key => {
-                    let b = maybe_val.take().unwrap();
-                    self.shift_probe_chain_down(index);
-                    self.len -= 1;
-                    break Some((b.key, b.value));
-                }
-                Some(_) => {}
-                None => {
-                    break None;
-                }
-            }
-            index = (index + 1) & self.index_mask;
         }
     }
 
