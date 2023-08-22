@@ -1,4 +1,0 @@
-[workspace]
-
-members = ["vec", "sort", "search", "linked_list", "cses", "hashmap"]
-resolver = "2"

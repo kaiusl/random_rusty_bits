@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "intro"
+name = "cses"
 version = "0.1.0"
