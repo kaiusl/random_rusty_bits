@@ -288,7 +288,7 @@ where
 
         if old_cap != 0 {
             // drop old buffer
-            let old_layout = Self::layout(self.cap);
+            let old_layout = Self::layout(old_cap);
             unsafe { alloc::dealloc(old_buf.as_ptr().cast::<u8>(), old_layout) }
         }
     }
