@@ -33,6 +33,10 @@ pub struct HashMap<K, V> {
 
 impl<K, V> Drop for HashMap<K, V> {
     fn drop(&mut self) {
+        if self.cap == 0 {
+            return;
+        }
+
         for i in 0..self.cap {
             let it = unsafe { self.buf.as_ptr().add(i) };
             unsafe { ptr::drop_in_place(it) };
