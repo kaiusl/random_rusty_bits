@@ -461,4 +461,52 @@ mod tests {
         assert_eq!(m.get(&5), Some((&5, &51)));
         assert_eq!(m.get(&6), None);
     }
+
+    mod proptests {
+        use proptest::prelude::*;
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+
+        use super::*;
+
+        proptest!(
+            #[test]
+            fn insert_get(
+                mut inserts in proptest::collection::vec(0..10000i32, 0..1000),
+                access in proptest::collection::vec(0..10000i32, 0..10)
+            ) {
+                let ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
+                let mut hmap = HashMap::new();
+                for v in &inserts {
+                    hmap.insert(*v, *v);
+                }
+
+                assert_eq!(ref_hmap.len(), hmap.len());
+
+                inserts.shuffle(&mut thread_rng());
+                for key in inserts.iter().chain(access.iter()) {
+                    assert_eq!(ref_hmap.get_key_value(key), hmap.get(key));
+                }
+            }
+
+            #[test]
+            fn remove(
+                mut inserts in proptest::collection::vec(0..10000i32, 0..1000),
+                access in proptest::collection::vec(0..10000i32, 0..10)
+            ) {
+                let mut ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
+                let mut hmap = HashMap::new();
+                for v in &inserts {
+                    hmap.insert(*v, *v);
+                }
+
+                assert_eq!(ref_hmap.len(), hmap.len());
+
+                inserts.shuffle(&mut thread_rng());
+                for key in access.iter().chain(inserts.iter()) {
+                    assert_eq!(ref_hmap.remove_entry(key), hmap.remove(key));
+                }
+            }
+        );
+    }
 }
