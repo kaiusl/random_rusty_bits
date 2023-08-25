@@ -3,7 +3,7 @@ use core::time::Duration;
 use std::collections::{HashMap, HashSet};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use hashmap::open_addressing::{linear_probing, robin_hood};
+use hashmap::open_addressing::{linear_probing, quadratic_probing, robin_hood};
 use rand::seq::IteratorRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -49,6 +49,13 @@ fn insert(c: &mut Criterion) {
                 keys.clone(),
                 lf,
                 linear_probing::HashMap
+            );
+            bench!(
+                lf "quadratic_probing",
+                count,
+                keys.clone(),
+                lf,
+                quadratic_probing::HashMap
             );
             bench!(lf "robin_hood", count, keys.clone(), lf, robin_hood::HashMap);
         }
@@ -118,6 +125,15 @@ fn get(c: &mut Criterion) {
             );
             bench_get!(lf
                 g,
+                "quadratic_probing",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                quadratic_probing::HashMap
+            );
+            bench_get!(lf
+                g,
                 "robin_hood",
                 count,
                 keys.clone(),
@@ -157,6 +173,15 @@ fn get_non_existing(c: &mut Criterion) {
                 access_keys,
                 lf,
                 linear_probing::HashMap
+            );
+            bench_get!(lf
+                g,
+                "quadratic_probing",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                quadratic_probing::HashMap
             );
             bench_get!(lf
                 g,
@@ -239,6 +264,15 @@ fn remove(c: &mut Criterion) {
                 lf,
                 linear_probing::HashMap
             );
+            bench!(
+                lf
+                "quadratic_probing",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                quadratic_probing::HashMap
+            );
             bench!(lf
                 "robin_hood",
                 count,
@@ -303,7 +337,10 @@ pub fn sample_nonoverlapping_keys_invalid(keys: &HashSet<i32>, count: usize) -> 
 
 criterion_group!(
     name = benches;
-    config = Criterion::default().measurement_time(Duration::from_secs(1)).warm_up_time(Duration::from_millis(100));
+    config = Criterion::default()
+        .measurement_time(Duration::from_secs(5))
+        .warm_up_time(Duration::from_millis(1000))
+        ;
     targets = get, get_non_existing, insert, remove
 );
 criterion_main!(benches);
