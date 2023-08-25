@@ -369,6 +369,53 @@ where
 }
 
 #[cfg(test)]
+impl<K, V> MapMetrics<K, V> for HashMap<K, V>
+where
+    K: Hash + Eq,
+{
+    fn get_with_metrics<Q>(&self, key: &Q) -> Option<(&K, &V, usize)>
+    where
+        Q: Eq + Hash,
+        K: Borrow<Q>,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        let hash = self.hash_key(key);
+        let orig_index = self.preferred_index(hash);
+        let mut index = orig_index;
+        let mut i: usize = 0;
+        loop {
+            let maybe_val = unsafe { self.buf.as_ptr().add(index) };
+            match unsafe { &*maybe_val } {
+                Bucket::Occupied((k, v)) if k.borrow() == key => break Some((k, v, i)),
+                Bucket::Occupied(_) | Bucket::Deleted => {}
+                Bucket::Empty => break None,
+            }
+            i += 1;
+            index = (orig_index + (i * i + i) / 2) & self.index_mask;
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn cap(&self) -> usize {
+        self.cap
+    }
+
+    fn load_factor(&self) -> f64 {
+        self.load_factor()
+    }
+
+    fn name(&self) -> &'static str {
+        "Quadratic probing"
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -12,6 +12,9 @@ use std::collections::hash_map::RandomState;
 
 use crate_alloc::alloc;
 
+#[cfg(test)]
+use super::metrics::MapMetrics;
+
 pub struct HashMap<K, V> {
     buf: NonNull<Bucket<K, V>>,
     cap: usize,
@@ -357,6 +360,53 @@ where
         }
 
         (old_buf, old_cap)
+    }
+}
+
+#[cfg(test)]
+impl<K, V> MapMetrics<K, V> for HashMap<K, V>
+where
+    K: Hash + Eq,
+{
+    fn get_with_metrics<Q>(&self, key: &Q) -> Option<(&K, &V, usize)>
+    where
+        Q: Eq + Hash,
+        K: Borrow<Q>,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        let hash = self.hash_key(key);
+        let mut index = self.preferred_index(hash);
+        let mut probe_len = 0;
+
+        loop {
+            let maybe_val = unsafe { self.buf.as_ptr().add(index) };
+            match unsafe { &*maybe_val } {
+                Bucket::Occupied((ref k, v)) if k.borrow() == key => break Some((k, v, probe_len)),
+                Bucket::Occupied(_) | Bucket::Deleted => {}
+                Bucket::Empty => break None,
+            }
+            index = (index + 1) & self.index_mask;
+            probe_len += 1;
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn cap(&self) -> usize {
+        self.cap
+    }
+
+    fn load_factor(&self) -> f64 {
+        self.load_factor()
+    }
+
+    fn name(&self) -> &'static str {
+        "Linear probing"
     }
 }
 
