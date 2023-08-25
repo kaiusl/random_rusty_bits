@@ -2,14 +2,49 @@ use core::hint::black_box;
 use core::time::Duration;
 use std::collections::{HashMap, HashSet};
 
+use criterion::measurement::Measurement;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hashmap::open_addressing::{linear_probing, quadratic_probing, robin_hood};
 use rand::seq::IteratorRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-fn insert(c: &mut Criterion) {
-    let mut g = c.benchmark_group("insert_new");
+macro_rules! select_measurement {
+    (refcycles) => {
+        pub const MEASUREMENT_KIND: &str = "refcycles";
+
+        pub fn create_measurement() -> impl ::criterion::measurement::Measurement {
+            ::criterion_perf_events::Perf::new(
+                ::perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
+                    ::perfcnt::linux::HardwareEventType::RefCPUCycles,
+                ),
+            )
+        }
+    };
+    (instructions) => {
+        pub const MEASUREMENT_KIND: &str = "instructions";
+
+        pub fn create_measurement() -> impl ::criterion::measurement::Measurement {
+            ::criterion_perf_events::Perf::new(
+                ::perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
+                    ::perfcnt::linux::HardwareEventType::Instructions,
+                ),
+            )
+        }
+    };
+    (walltime) => {
+        pub const MEASUREMENT_KIND: &str = "walltime";
+
+        pub fn create_measurement() -> impl ::criterion::measurement::Measurement {
+            ::criterion::measurement::WallTime
+        }
+    };
+}
+
+select_measurement!(walltime);
+
+fn insert<M: Measurement>(c: &mut Criterion<M>) {
+    let mut g = c.benchmark_group(format!("insert_new_{}", MEASUREMENT_KIND));
 
     macro_rules! bench {
         (new $name:expr, $count:expr, $keys:expr, $($map:tt)*) => {
@@ -103,8 +138,9 @@ macro_rules! bench_get {
     };
 }
 
-fn get(c: &mut Criterion) {
-    let mut g = c.benchmark_group("get");
+fn get<M: Measurement>(c: &mut Criterion<M>) {
+    let mut g = c.benchmark_group(format!("get_{}", MEASUREMENT_KIND));
+    g.sampling_mode(criterion::SamplingMode::Flat);
 
     let mut count = 1000;
     for _ in 0..40 {
@@ -154,8 +190,8 @@ fn get(c: &mut Criterion) {
     }
 }
 
-fn get_non_existing(c: &mut Criterion) {
-    let mut g = c.benchmark_group("get_non_existing");
+fn get_non_existing<M: Measurement>(c: &mut Criterion<M>) {
+    let mut g = c.benchmark_group(format!("get_non_existing_{}", MEASUREMENT_KIND));
 
     let mut count = 1000;
     for _ in 0..40 {
@@ -205,8 +241,8 @@ fn get_non_existing(c: &mut Criterion) {
     }
 }
 
-fn remove(c: &mut Criterion) {
-    let mut g = c.benchmark_group("remove");
+fn remove<M: Measurement>(c: &mut Criterion<M>) {
+    let mut g = c.benchmark_group(format!("remove_{}", MEASUREMENT_KIND));
 
     macro_rules! bench {
         ($name:expr, $count:expr, $keys:expr, $access_keys:expr, $($map:tt)*) => {
@@ -340,6 +376,7 @@ criterion_group!(
     config = Criterion::default()
         .measurement_time(Duration::from_secs(5))
         .warm_up_time(Duration::from_millis(1000))
+        .with_measurement(create_measurement())
         ;
     targets = get, get_non_existing, insert, remove
 );
