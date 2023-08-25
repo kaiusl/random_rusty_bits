@@ -477,10 +477,21 @@ mod tests {
 
         use super::*;
 
+        #[cfg(not(miri))]
+        const MAP_SIZE: usize = 1000;
+        #[cfg(miri)]
+        const MAP_SIZE: usize = 50;
+
+        #[cfg(not(miri))]
+        const PROPTEST_CASES: u32 = 1000;
+        #[cfg(miri)]
+        const PROPTEST_CASES: u32 = 10;
+
         proptest!(
+            #![proptest_config(ProptestConfig::with_cases(PROPTEST_CASES))]
             #[test]
             fn insert_get(
-                mut inserts in proptest::collection::vec(0..10000i32, 0..1000),
+                mut inserts in proptest::collection::vec(0..10000i32, 0..MAP_SIZE),
                 access in proptest::collection::vec(0..10000i32, 0..10)
             ) {
                 let ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
@@ -499,7 +510,7 @@ mod tests {
 
             #[test]
             fn remove(
-                mut inserts in proptest::collection::vec(0..10000i32, 0..1000),
+                mut inserts in proptest::collection::vec(0..10000i32, 0..MAP_SIZE),
                 access in proptest::collection::vec(0..10000i32, 0..10)
             ) {
                 let mut ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
