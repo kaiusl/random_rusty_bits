@@ -114,9 +114,15 @@ fn metrics() {
     let count_at_090 = (cap as f64 * 0.90) as usize;
     let keys = gen_unique_keys_int(count_at_0999, true, u64::MAX / 2);
     let load_factor = 0.999999999;
-    let mut rh = super::robin_hood::HashMap::with_load_factor(load_factor);
-    let mut lin = super::linear_probing::HashMap::with_load_factor(load_factor);
-    let mut quad = super::quadratic_probing::HashMap::with_load_factor(load_factor);
+    let mut rh = super::robin_hood::HashMap::with_capacity_and_load_factor(cap - 1, load_factor);
+    let mut lin =
+        super::linear_probing::HashMap::with_capacity_and_load_factor(cap - 1, load_factor);
+    let mut quad =
+        super::quadratic_probing::HashMap::with_capacity_and_load_factor(cap - 1, load_factor);
+    assert_eq!(rh.cap(), cap);
+    assert_eq!(lin.cap(), cap);
+    assert_eq!(quad.cap(), cap);
+
     for k in keys.iter().copied() {
         rh.insert(k, k);
         lin.insert(k, k);

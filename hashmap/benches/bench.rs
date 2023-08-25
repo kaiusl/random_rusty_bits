@@ -107,7 +107,7 @@ fn insert<M: Measurement>(c: &mut Criterion<M>) {
 
 macro_rules! bench_get {
     (new $g:expr, $name:expr, $count:expr, $keys:expr,  $access_keys:expr, $($map:tt)*) => {
-        let mut map = $($map)*::new();
+        let mut map = $($map)*::with_capacity($count);
         for x in $keys {
             map.insert(x, x);
         }
@@ -122,7 +122,7 @@ macro_rules! bench_get {
 
     };
     (lf $g:expr, $name:expr, $count:expr, $keys:expr,  $access_keys:expr,  $lf:expr, $($map:tt)*) => {
-        let mut map = $($map)*::with_load_factor($lf);
+        let mut map = $($map)*::with_capacity_and_load_factor($count, $lf);
         for x in $keys {
             map.insert(x, x);
         }
@@ -246,7 +246,7 @@ fn remove<M: Measurement>(c: &mut Criterion<M>) {
 
     macro_rules! bench {
         ($name:expr, $count:expr, $keys:expr, $access_keys:expr, $($map:tt)*) => {
-            let mut map = $($map)*::new();
+            let mut map = $($map)*::with_capacity($count);
             for x in $keys {
                 map.insert(x, x);
             }
@@ -264,7 +264,7 @@ fn remove<M: Measurement>(c: &mut Criterion<M>) {
             });
         };
         (lf $name:expr, $count:expr, $keys:expr, $access_keys:expr, $lf:expr, $($map:tt)*) => {
-            let mut map = $($map)*::with_load_factor($lf);
+            let mut map = $($map)*::with_capacity_and_load_factor($count, $lf);
             for x in $keys {
                 map.insert(x, x);
             }

@@ -14,6 +14,7 @@ use crate_alloc::alloc;
 
 #[cfg(test)]
 use super::metrics::MapMetrics;
+use super::round_up_to_power_of_two;
 
 pub struct HashMap<K, V> {
     buf: NonNull<Bucket<K, V>>,
@@ -129,11 +130,33 @@ impl<K, V> HashMap<K, V> {
         Self::with_load_factor(Self::DEF_CRIT_LOAD_FACTOR)
     }
 
-    pub fn with_load_factor(lf: f64) -> Self {
+    pub fn with_load_factor(load_factor: f64) -> Self {
+        Self::with_capacity_and_load_factor(0, load_factor)
+    }
+
+    /// Creates a new hash map with capacity to store at least `capacity` pairs
+    /// without reallocation.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_load_factor(capacity, Self::DEF_CRIT_LOAD_FACTOR)
+    }
+
+    /// Creates a new hash map with capacity to store at least `capacity` pairs
+    /// without reallocation.
+    pub fn with_capacity_and_load_factor(capacity: usize, lf: f64) -> Self {
+        let (buf, cap, index_mask) = if capacity > 0 {
+            let capacity = (capacity as f64 / lf + 1.0) as usize;
+            let capacity = round_up_to_power_of_two(capacity);
+            debug_assert!(capacity.is_power_of_two());
+            debug_assert!(capacity > 0);
+            let new_buf = unsafe { Self::alloc_new_buf_initialized(capacity) };
+            (new_buf, capacity, capacity - 1)
+        } else {
+            (NonNull::dangling(), 0, 0)
+        };
         Self {
-            buf: NonNull::dangling(),
-            cap: 0,
-            index_mask: 0,
+            buf,
+            cap,
+            index_mask,
             len: 0,
             hash_builder: RandomState::new(),
             crit_load_factor: lf,
@@ -277,8 +300,13 @@ where
         key.hash(&mut hasher);
         hasher.finish()
     }
+}
 
-    fn grow(&mut self) {
+impl<K, V> HashMap<K, V> {
+    fn grow(&mut self)
+    where
+        K: Eq + Hash,
+    {
         let new_cap = if self.cap == 0 {
             Self::INITIAL_CAP
         } else {
@@ -291,7 +319,10 @@ where
     /// # PANICS
     ///
     /// * if `new_cap` is not power of two
-    fn grow_to(&mut self, new_cap: usize) {
+    fn grow_to(&mut self, new_cap: usize)
+    where
+        K: Eq + Hash,
+    {
         assert!(new_cap.is_power_of_two());
         if new_cap <= self.cap {
             return;
@@ -347,7 +378,10 @@ where
         &mut self,
         new_buf: NonNull<Bucket<K, V>>,
         new_cap: usize,
-    ) -> (NonNull<Bucket<K, V>>, usize) {
+    ) -> (NonNull<Bucket<K, V>>, usize)
+    where
+        K: Eq + Hash,
+    {
         let old_buf = mem::replace(&mut self.buf, new_buf);
         let old_cap = mem::replace(&mut self.cap, new_cap);
         self.index_mask = self.cap - 1;
@@ -542,7 +576,7 @@ mod tests {
                 access in proptest::collection::vec(0..10000i32, 0..10)
             ) {
                 let ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
-                let mut hmap = HashMap::new();
+                let mut hmap = HashMap::with_capacity(ref_hmap.len());
                 for v in &inserts {
                     hmap.insert(*v, *v);
                 }
@@ -561,7 +595,7 @@ mod tests {
                 access in proptest::collection::vec(0..10000i32, 0..10)
             ) {
                 let mut ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
-                let mut hmap = HashMap::new();
+                let mut hmap = HashMap::with_capacity(ref_hmap.len());
                 for v in &inserts {
                     hmap.insert(*v, *v);
                 }

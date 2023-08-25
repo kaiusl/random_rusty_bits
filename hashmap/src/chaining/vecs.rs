@@ -34,6 +34,16 @@ where
         }
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(capacity),
+            cap: 0,
+            len: 0,
+            hash_builder: RandomState::new(),
+            marker: PhantomData,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
