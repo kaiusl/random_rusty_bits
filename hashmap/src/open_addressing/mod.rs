@@ -1,3 +1,4 @@
+pub mod cuckoo;
 pub mod linear_probing;
 pub mod quadratic_probing;
 pub mod robin_hood;

@@ -119,22 +119,26 @@ fn metrics() {
         super::linear_probing::HashMap::with_capacity_and_load_factor(cap - 1, load_factor);
     let mut quad =
         super::quadratic_probing::HashMap::with_capacity_and_load_factor(cap - 1, load_factor);
+    let mut cuckoo = super::cuckoo::HashMap::with_capacity_and_load_factor(cap - 1, load_factor);
     assert_eq!(rh.cap(), cap);
     assert_eq!(lin.cap(), cap);
     assert_eq!(quad.cap(), cap);
-
+    assert_eq!(cuckoo.cap(), cap);
     for k in keys.iter().copied() {
         rh.insert(k, k);
         lin.insert(k, k);
         quad.insert(k, k);
+        cuckoo.insert(k, k);
         if rh.len() == count_at_090 || rh.len() == count_at_099 {
             print_stats(keys.iter(), &lin);
             print_stats(keys.iter(), &rh);
             print_stats(keys.iter(), &quad);
+            print_stats(keys.iter(), &cuckoo);
         }
     }
 
     print_stats(keys.iter(), &lin);
     print_stats(keys.iter(), &rh);
     print_stats(keys.iter(), &quad);
+    print_stats(keys.iter(), &cuckoo);
 }

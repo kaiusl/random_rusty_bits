@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use criterion::measurement::Measurement;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use hashmap::open_addressing::{linear_probing, quadratic_probing, robin_hood};
+use hashmap::open_addressing::{cuckoo, linear_probing, quadratic_probing, robin_hood};
 use rand::seq::IteratorRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -93,6 +93,7 @@ fn insert<M: Measurement>(c: &mut Criterion<M>) {
                 quadratic_probing::HashMap
             );
             bench!(lf "robin_hood", count, keys.clone(), lf, robin_hood::HashMap);
+            bench!(lf "cuckoo", count, keys.clone(), lf, cuckoo::HashMap);
         }
 
         bench!(
@@ -177,6 +178,15 @@ fn get<M: Measurement>(c: &mut Criterion<M>) {
                 lf,
                 robin_hood::HashMap
             );
+            bench_get!(lf
+                g,
+                "cuckoo",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                cuckoo::HashMap
+            );
         }
         bench_get!(new
             g,
@@ -227,6 +237,15 @@ fn get_non_existing<M: Measurement>(c: &mut Criterion<M>) {
                 access_keys,
                 lf,
                 robin_hood::HashMap
+            );
+            bench_get!(lf
+                g,
+                "cuckoo",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                cuckoo::HashMap
             );
         }
         bench_get!(new
@@ -316,6 +335,15 @@ fn remove<M: Measurement>(c: &mut Criterion<M>) {
                 access_keys,
                 lf,
                 robin_hood::HashMap
+            );
+            bench_get!(lf
+                g,
+                "cuckoo",
+                count,
+                keys.clone(),
+                access_keys,
+                lf,
+                cuckoo::HashMap
             );
         }
         bench!(
