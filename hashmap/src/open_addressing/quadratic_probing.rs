@@ -234,17 +234,19 @@ where
         }
     }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Option<(&K, &V)>
+    pub fn get<Q>(&self, key: &Q) -> Option<(&K, &V)>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
-        match self.get_bucket(key) {
-            Some(b) => match unsafe { &*b } {
+        let ptr = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            match unsafe { &*ptr } {
                 Bucket::Occupied((k, v)) => Some((k, v)),
                 _ => unreachable!(),
-            },
-            None => None,
+            }
         }
     }
 
@@ -253,26 +255,28 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + fmt::Debug,
     {
-        match self.get_bucket(key) {
-            Some(b) => {
-                let b = unsafe { ptr::replace(b, Bucket::Deleted) };
-                self.len -= 1;
-                match b {
-                    Bucket::Occupied((k, v)) => Some((k, v)),
-                    _ => unreachable!(),
-                }
+        let ptr = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            let b = unsafe { ptr::replace(ptr, Bucket::Deleted) };
+            self.len -= 1;
+            match b {
+                Bucket::Occupied((k, v)) => Some((k, v)),
+                _ => unreachable!(),
             }
-            None => None,
         }
     }
 
-    fn get_bucket<Q>(&mut self, key: &Q) -> Option<*mut Bucket<K, V>>
+    /// Return `ptr::null_mut()` if the key is not present,
+    /// a pointer to valid `Bucket::Occupied(..)` otherwise
+    fn get_bucket<Q>(&self, key: &Q) -> *mut Bucket<K, V>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
         if self.is_empty() {
-            return None;
+            return ptr::null_mut();
         }
 
         let hash = self.hash_key(key);
@@ -282,9 +286,9 @@ where
         loop {
             let maybe_val = unsafe { self.buf.as_ptr().add(index) };
             match unsafe { &*maybe_val } {
-                Bucket::Occupied((k, _)) if k.borrow() == key => break Some(maybe_val),
+                Bucket::Occupied((k, _)) if k.borrow() == key => break maybe_val,
                 Bucket::Occupied(_) | Bucket::Deleted => {}
-                Bucket::Empty => break None,
+                Bucket::Empty => break ptr::null_mut(),
             }
 
             i += 1;

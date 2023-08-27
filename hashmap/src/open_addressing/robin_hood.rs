@@ -259,9 +259,11 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
-        match self.get_bucket(key) {
-            Some((b, _)) => unsafe { &*b }.as_ref().map(|b| (&b.key, &b.value)),
-            None => None,
+        let (ptr, _) = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            unsafe { &*ptr }.as_ref().map(|b| (&b.key, &b.value))
         }
     }
 
@@ -270,24 +272,24 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + fmt::Debug,
     {
-        match self.get_bucket(key) {
-            Some((bucket, index)) => {
-                let b = unsafe { ptr::replace(bucket, None) }.unwrap();
-                self.shift_probe_chain_down(index);
-                self.len -= 1;
-                Some((b.key, b.value))
-            }
-            None => None,
+        let (ptr, index) = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            let b = unsafe { ptr::replace(ptr, None) }.unwrap();
+            self.shift_probe_chain_down(index);
+            self.len -= 1;
+            Some((b.key, b.value))
         }
     }
 
-    fn get_bucket<Q>(&self, key: &Q) -> Option<(*mut Option<Bucket<K, V>>, usize)>
+    fn get_bucket<Q>(&self, key: &Q) -> (*mut Option<Bucket<K, V>>, usize)
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
         if self.is_empty() {
-            return None;
+            return (ptr::null_mut(), 0);
         }
 
         let hash = self.hash_key(key);
@@ -297,16 +299,16 @@ where
         loop {
             let maybe_val = unsafe { self.buf.as_ptr().add(index) };
             match unsafe { &*maybe_val } {
-                Some(b) if b.key.borrow() == key => break Some((maybe_val, index)),
+                Some(b) if b.key.borrow() == key => break (maybe_val, index),
                 Some(Bucket { hash, .. }) => {
                     let this_index = self.preferred_index(*hash);
                     let this_probe_len = self.probe_len(this_index, index);
 
                     if this_probe_len < probe_len {
-                        break None;
+                        break (ptr::null_mut(), index);
                     }
                 }
-                None => break None,
+                None => break (ptr::null_mut(), index),
             }
             index = (index + 1) & self.index_mask;
             probe_len += 1;

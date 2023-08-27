@@ -232,17 +232,19 @@ where
         }
     }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Option<(&K, &V)>
+    pub fn get<Q>(&self, key: &Q) -> Option<(&K, &V)>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
-        match self.get_bucket(key) {
-            Some(b) => match unsafe { &*b } {
+        let ptr = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            match unsafe { &*ptr } {
                 Bucket::Occupied((k, v)) => Some((k, v)),
                 _ => unreachable!(),
-            },
-            None => None,
+            }
         }
     }
 
@@ -251,26 +253,28 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + fmt::Debug,
     {
-        match self.get_bucket(key) {
-            Some(b) => {
-                let b = unsafe { ptr::replace(b, Bucket::Deleted) };
-                self.len -= 1;
-                match b {
-                    Bucket::Occupied((k, v)) => Some((k, v)),
-                    _ => unreachable!(),
-                }
+        let ptr = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            let b = unsafe { ptr::replace(ptr, Bucket::Deleted) };
+            self.len -= 1;
+            match b {
+                Bucket::Occupied((k, v)) => Some((k, v)),
+                _ => unreachable!(),
             }
-            None => None,
         }
     }
 
-    fn get_bucket<Q>(&mut self, key: &Q) -> Option<*mut Bucket<K, V>>
+    /// Return `ptr::null_mut()` if the key is not present,
+    /// a pointer to valid `Bucket::Occupied(..)` otherwise
+    fn get_bucket<Q>(&self, key: &Q) -> *mut Bucket<K, V>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
         if self.is_empty() {
-            return None;
+            return ptr::null_mut();
         }
 
         let hash = self.hash_key(key);
@@ -279,9 +283,9 @@ where
         loop {
             let maybe_val = unsafe { self.buf.as_ptr().add(index) };
             match unsafe { &*maybe_val } {
-                Bucket::Occupied((ref k, _)) if k.borrow() == key => break Some(maybe_val),
+                Bucket::Occupied((ref k, _)) if k.borrow() == key => break maybe_val,
                 Bucket::Occupied(_) | Bucket::Deleted => {}
-                Bucket::Empty => break None,
+                Bucket::Empty => break ptr::null_mut(),
             }
             index = (index + 1) & self.index_mask;
         }
@@ -606,6 +610,7 @@ mod tests {
             }
 
             #[test]
+            #[cfg_attr(miri, ignore = "nothing for miri to really check, no need to waste time")]
             fn with_cap(cap in 0..100_000usize, lf in 0.5..0.999) {
                 let map = HashMap::<u8, ()>::with_capacity_and_load_factor(cap, lf);
                 let will_be_lf = cap as f64/map.cap as f64;

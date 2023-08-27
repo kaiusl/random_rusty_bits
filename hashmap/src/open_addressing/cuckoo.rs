@@ -297,17 +297,16 @@ where
         }
     }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Option<(&K, &V)>
+    pub fn get<Q>(&self, key: &Q) -> Option<(&K, &V)>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
-        match self.get_bucket(key) {
-            Some(b) => match unsafe { &*b } {
-                Some((k, v)) => Some((k, v)),
-                _ => unreachable!(),
-            },
-            None => None,
+        let ptr = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            unsafe { &*ptr }.as_ref().map(|(k, v)| (k, v))
         }
     }
 
@@ -316,33 +315,29 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + fmt::Debug,
     {
-        match self.get_bucket(key) {
-            Some(b) => {
-                let b = unsafe { ptr::replace(b, None) };
-                self.len -= 1;
-                match b {
-                    Some((k, v)) => Some((k, v)),
-                    _ => unreachable!(),
-                }
-            }
-            None => None,
+        let ptr = self.get_bucket(key);
+        if ptr.is_null() {
+            None
+        } else {
+            self.len -= 1;
+            unsafe { ptr::replace(ptr, None) }
         }
     }
 
-    fn get_bucket<Q>(&mut self, key: &Q) -> Option<*mut Option<(K, V)>>
+    fn get_bucket<Q>(&self, key: &Q) -> *mut Option<(K, V)>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
     {
         if self.is_empty() {
-            return None;
+            return ptr::null_mut();
         }
 
         let hash = self.hash_key1(key);
         let index = self.preferred_index(hash);
         let maybe_val = unsafe { self.buf1.as_ptr().add(index) };
         match unsafe { &*maybe_val } {
-            Some((ref k, _)) if k.borrow() == key => return Some(maybe_val),
+            Some((ref k, _)) if k.borrow() == key => return maybe_val,
             _ => {}
         }
 
@@ -350,8 +345,8 @@ where
         let index = self.preferred_index(hash);
         let maybe_val = unsafe { self.buf2.as_ptr().add(index) };
         match unsafe { &*maybe_val } {
-            Some((ref k, _)) if k.borrow() == key => Some(maybe_val),
-            _ => None,
+            Some((ref k, _)) if k.borrow() == key => maybe_val,
+            _ => ptr::null_mut(),
         }
     }
 
