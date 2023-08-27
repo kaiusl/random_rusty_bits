@@ -1,9 +1,10 @@
 use core::borrow::Borrow;
 use core::hash::Hash;
+use std::collections::HashSet;
+
 use hdrhistogram::Histogram;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use std::collections::HashSet;
 
 pub(super) trait MapMetrics<K, V> {
     /// Return (key, value, number of probes)
