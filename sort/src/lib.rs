@@ -2,6 +2,8 @@
 #![deny(rust_2018_idioms)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod merge_sort;
+
 pub fn bubble_sort<T: PartialOrd>(slice: &mut [T]) {
     for iteration in 0..slice.len() {
         for i in 0..slice.len() - 1 - iteration {
