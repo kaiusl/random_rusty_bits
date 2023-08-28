@@ -188,6 +188,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
     fn merge_sort_copy_test() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
         let mut sorted = arr.clone();
@@ -224,6 +225,7 @@ mod tests {
             #![proptest_config(ProptestConfig::with_cases(PROPTEST_CASES))]
 
             #[test]
+            #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
             fn merge_sort_copy_test(
                 mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
             ) {
