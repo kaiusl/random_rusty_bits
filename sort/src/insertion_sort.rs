@@ -1,6 +1,6 @@
 pub fn insertion_sort<T>(slice: &mut [T])
 where
-    T: PartialOrd,
+    T: Ord,
 {
     for j in 1..slice.len() {
         let to_sort = &slice[j];
@@ -17,7 +17,7 @@ where
 
 pub fn insertion_sort2<T>(slice: &mut [T])
 where
-    T: PartialOrd,
+    T: Ord,
 {
     for j in 1..slice.len() {
         let to_sort = &slice[j];

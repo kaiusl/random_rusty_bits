@@ -1,4 +1,4 @@
-pub fn bubble_sort<T: PartialOrd>(slice: &mut [T]) {
+pub fn bubble_sort<T: Ord>(slice: &mut [T]) {
     for iteration in 0..slice.len() {
         for i in 0..slice.len() - 1 - iteration {
             if slice[i] > slice[i + 1] {
