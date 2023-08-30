@@ -1,16 +1,16 @@
 use core::mem;
 
-pub fn quick_sort_lomuto<T: Ord>(slice: &mut [T]) {
+pub fn quicksort_lomuto<T: Ord>(slice: &mut [T]) {
     if slice.len() < 2 {
         return;
     }
 
     let (l, r) = partition_lomuto(slice);
     if l.len() > 1 {
-        quick_sort_lomuto(l);
+        quicksort_lomuto(l);
     }
     if r.len() > 1 {
-        quick_sort_lomuto(r);
+        quicksort_lomuto(r);
     }
 }
 
@@ -50,17 +50,17 @@ fn partition_lomuto<T: Ord>(slice: &mut [T]) -> (&mut [T], &mut [T]) {
     (a, &mut b[1..])
 }
 
-pub fn quick_sort_hoare<T: Ord>(slice: &mut [T]) {
+pub fn quicksort_hoare<T: Ord>(slice: &mut [T]) {
     if slice.len() < 2 {
         return;
     }
 
     let (l, r) = partition_hoare(slice);
     if l.len() > 1 {
-        quick_sort_hoare(l);
+        quicksort_hoare(l);
     }
     if r.len() > 1 {
-        quick_sort_hoare(r);
+        quicksort_hoare(r);
     }
 }
 
@@ -151,7 +151,7 @@ mod tests {
     #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
     fn test_lomuto() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
-        quick_sort_lomuto(&mut arr);
+        quicksort_lomuto(&mut arr);
         assert_sorted(&arr);
     }
 
@@ -159,7 +159,7 @@ mod tests {
     #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
     fn test_hoare() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
-        quick_sort_hoare(&mut arr);
+        quicksort_hoare(&mut arr);
         assert_sorted(&arr);
     }
 
@@ -186,7 +186,7 @@ mod tests {
             fn test_lomuto(
                 mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
             ) {
-               quick_sort_lomuto(vec.as_mut_slice());
+               quicksort_lomuto(vec.as_mut_slice());
                assert_sorted(&vec);
             }
 
@@ -195,7 +195,7 @@ mod tests {
             fn test_hoare(
                 mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
             ) {
-               quick_sort_hoare(vec.as_mut_slice());
+               quicksort_hoare(vec.as_mut_slice());
                assert_sorted(&vec);
             }
 

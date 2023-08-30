@@ -8,10 +8,10 @@ use criterion::{
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use sort::bubble_sort::bubble_sort;
-use sort::heap_sort::heap_sort;
+use sort::heapsort::heapsort;
 use sort::insertion_sort::{insertion_sort, insertion_sort2};
 use sort::merge_sort::{merge_sort, merge_sort_copy};
-use sort::quick_sort::{quick_sort_hoare, quick_sort_lomuto};
+use sort::quicksort::{quicksort_hoare, quicksort_lomuto};
 use sort::selection_sort::{selection_sort, selection_sort2};
 
 fn std_sort<T: Ord>(slice: &mut [T]) {
@@ -164,9 +164,9 @@ fn bench_group<M: Measurement>(
             selection_sort2,
             merge_sort,
             merge_sort_copy,
-            heap_sort,
-            quick_sort_hoare,
-            quick_sort_lomuto,
+            heapsort,
+            quicksort_hoare,
+            quicksort_lomuto,
             std_sort,
             std_sort_unstable,
         );

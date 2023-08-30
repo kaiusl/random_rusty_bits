@@ -8,7 +8,7 @@
 // left_child = parent_index * 2 + 1
 // right_child = left_child + 1 = parent_index * 2 + 2
 
-pub fn heap_sort<T: Ord>(slice: &mut [T]) {
+pub fn heapsort<T: Ord>(slice: &mut [T]) {
     build_max_heap(slice);
 
     for i in (1..slice.len()).rev() {
@@ -98,7 +98,7 @@ mod tests {
     #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
     fn test() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
-        heap_sort(&mut arr);
+        heapsort(&mut arr);
         assert_sorted(&arr);
     }
 
@@ -106,7 +106,7 @@ mod tests {
     #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
     fn test2() {
         let mut arr = vec![0, 0, 1];
-        heap_sort(&mut arr);
+        heapsort(&mut arr);
         assert_sorted(&arr);
     }
 
@@ -133,7 +133,7 @@ mod tests {
             fn test(
                 mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
             ) {
-               heap_sort(vec.as_mut_slice());
+               heapsort(vec.as_mut_slice());
                assert_sorted(&vec);
             }
 

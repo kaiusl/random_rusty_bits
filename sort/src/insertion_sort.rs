@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
-    fn insertion_sort_test() {
+    fn test() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
         insertion_sort(arr.as_mut_slice());
         assert_sorted(&arr);
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
-    fn insertion_sort2_test() {
+    fn test2() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
         insertion_sort2(arr.as_mut_slice());
         assert_sorted(&arr);
@@ -74,7 +74,7 @@ mod tests {
 
             #[test]
             #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
-            fn insertion_sort_test(
+            fn test(
                 mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
             ) {
                insertion_sort(vec.as_mut_slice());
@@ -83,7 +83,7 @@ mod tests {
 
             #[test]
             #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
-            fn insertion_sort2_test(
+            fn test2(
                 mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
             ) {
                insertion_sort2(vec.as_mut_slice());
