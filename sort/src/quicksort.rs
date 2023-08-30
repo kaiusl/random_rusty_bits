@@ -26,6 +26,11 @@ pub fn quicksort_lomuto<T: Ord>(slice: &mut [T]) {
 fn partition_lomuto<T: Ord>(slice: &mut [T]) -> (&mut [T], &mut [T]) {
     // Move every item thats smaller than pivot to left.
 
+    // use middle element as pivot to not fall to worst case perf for already sorted slices
+    let mid = slice.len() / 2;
+    // swap it to the end so we don't have to deal with cases where the pivot needs to move
+    slice.swap(slice.len() - 1, mid);
+
     // See https://www.geeksforgeeks.org/quick-sort/ for good illustration on the algorithm
     let (pivot, rest) = slice.split_last_mut().unwrap();
 
@@ -80,6 +85,11 @@ fn partition_hoare<T: Ord>(slice: &mut [T]) -> (&mut [T], &mut [T]) {
     // the larger items. If the two halves meet, then all the items must be
     // partitioned by the pivot. Final step is to move the pivot itselt to the
     // correct position.
+
+    // use middle element as pivot to not fall to worst case perf for already sorted slices
+    let mid = slice.len() / 2;
+    // swap it to the start so we don't have to deal with cases where the pivot needs to move
+    slice.swap(0, mid);
 
     let (pivot, rest) = slice.split_first_mut().unwrap();
 
