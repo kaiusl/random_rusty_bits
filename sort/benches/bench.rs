@@ -122,27 +122,24 @@ fn bench_group<M: Measurement>(
 ) {
     fn bench_one<M: Measurement>(
         g: &mut BenchmarkGroup<'_, M>,
+        name: &str,
         count: usize,
         items: &Vec<i32>,
         sort: fn(&mut [i32]),
     ) {
-        g.bench_with_input(
-            BenchmarkId::new(stringify!(sort), count),
-            &count,
-            |b, _i| {
-                b.iter_batched_ref(
-                    || items.clone(),
-                    |i| sort(i),
-                    criterion::BatchSize::SmallInput,
-                )
-            },
-        );
+        g.bench_with_input(BenchmarkId::new(name, count), &count, |b, _i| {
+            b.iter_batched_ref(
+                || items.clone(),
+                |i| sort(i),
+                criterion::BatchSize::SmallInput,
+            )
+        });
     }
 
     macro_rules! bench {
         ($g:expr, $count:expr, $vec:expr, $($sort:path),+ $(,)?) => {
            $(
-               bench_one($g, $count, &$vec, $sort);
+               bench_one($g, stringify!($sort), $count, &$vec, $sort);
             )+
         };
     }
