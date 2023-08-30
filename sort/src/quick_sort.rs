@@ -1,6 +1,6 @@
 use core::mem;
 
-fn quick_sort_lomuto<T: Ord>(slice: &mut [T]) {
+pub fn quick_sort_lomuto<T: Ord>(slice: &mut [T]) {
     if slice.len() < 2 {
         return;
     }
@@ -50,7 +50,7 @@ fn partition_lomuto<T: Ord>(slice: &mut [T]) -> (&mut [T], &mut [T]) {
     (a, &mut b[1..])
 }
 
-fn quick_sort_hoare<T: Ord>(slice: &mut [T]) {
+pub fn quick_sort_hoare<T: Ord>(slice: &mut [T]) {
     if slice.len() < 2 {
         return;
     }

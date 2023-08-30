@@ -1,7 +1,7 @@
 use core::mem::{self, MaybeUninit};
 
 /// Merge sort that works with only `Copy` types
-fn merge_sort_copy<T: Ord + Copy>(slice: &mut [T]) {
+pub fn merge_sort_copy<T: Ord + Copy>(slice: &mut [T]) {
     let mut tmp = Vec::with_capacity(slice.len());
     tmp.extend(slice.iter().copied());
     merge_sort_copy_core(slice, &mut tmp);
@@ -61,7 +61,7 @@ fn merge_copy<T: Ord>(output: &mut [T], l: &mut [T], r: &mut [T]) {
 }
 
 /// Generic merge sort that also works with non-`Copy` types.
-fn merge_sort<T: Ord>(slice: &mut [T]) {
+pub fn merge_sort<T: Ord>(slice: &mut [T]) {
     let mut tmp = Vec::with_capacity(slice.len());
     for _ in 0..slice.len() {
         tmp.push(MaybeUninit::<T>::uninit());
