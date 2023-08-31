@@ -7,7 +7,7 @@ use criterion::{
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use sort::bubble_sort::bubble_sort;
+use sort::bubble_sort::{bubble_sort, bubble_sort2, bubble_sort2_unsafe};
 use sort::heapsort::heapsort;
 use sort::insertion_sort::{insertion_sort, insertion_sort2};
 use sort::merge_sort::{merge_sort, merge_sort_copy};
@@ -148,13 +148,15 @@ fn bench_group<M: Measurement>(
     let mut g = c.benchmark_group(format!("{}_{}", name, MEASUREMENT_KIND));
     g.plot_config(plot_config.clone());
 
-    for count in [10, 100, 1_000, 10_000] {
+    for count in [8, 64, 512, 4096, 32768] {
         let vec = gen_func(count, i32::MAX);
         bench!(
             &mut g,
             count,
             vec,
             bubble_sort,
+            bubble_sort2,
+            bubble_sort2_unsafe,
             insertion_sort,
             insertion_sort2,
             selection_sort,
