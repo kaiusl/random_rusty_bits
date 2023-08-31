@@ -1,8 +1,17 @@
 pub fn bubble_sort<T: Ord>(slice: &mut [T]) {
     for iteration in 0..slice.len() {
+        let mut is_sorted = true;
         for i in 0..slice.len() - 1 - iteration {
             if slice[i] > slice[i + 1] {
                 slice.swap(i, i + 1);
+                is_sorted = false;
+            }
+        }
+        if is_sorted {
+            break;
+        }
+    }
+}
             }
         }
     }
