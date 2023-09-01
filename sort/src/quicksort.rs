@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    //#[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
+    #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
     fn test_3way() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
         quicksort_3way(&mut arr);
@@ -329,7 +329,7 @@ mod tests {
             }
 
             #[test]
-            //#[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
+            #[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
             fn test_3way(
                 mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
             ) {
