@@ -11,7 +11,7 @@ use sort::bubble_sort::{bubble_sort, bubble_sort2, bubble_sort2_unsafe};
 use sort::heapsort::heapsort;
 use sort::insertion_sort::{insertion_sort, insertion_sort2};
 use sort::merge_sort::{merge_sort, merge_sort_copy};
-use sort::quicksort::{quicksort_hoare, quicksort_lomuto};
+use sort::quicksort::{quicksort_3way, quicksort_hoare, quicksort_lomuto};
 use sort::selection_sort::{selection_sort, selection_sort2};
 
 fn std_sort<T: Ord>(slice: &mut [T]) {
@@ -166,6 +166,7 @@ fn bench_group<M: Measurement>(
             heapsort,
             quicksort_hoare,
             quicksort_lomuto,
+            quicksort_3way,
             std_sort,
             std_sort_unstable,
         );

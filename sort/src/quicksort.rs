@@ -145,6 +145,116 @@ fn partition_hoare<T: Ord>(slice: &mut [T]) -> (&mut [T], &mut [T]) {
     (a, &mut b[1..])
 }
 
+pub fn quicksort_3way<T: Ord>(slice: &mut [T]) {
+    if slice.len() < 2 {
+        return;
+    }
+
+    let (l, r) = partition_3way(slice);
+    if l.len() > 1 {
+        quicksort_3way(l);
+    }
+    if r.len() > 1 {
+        quicksort_3way(r);
+    }
+}
+
+/// Partition the slice around the value of first item in-place using Hoare's scheme.
+///
+/// Returns two slices, where first contains items smaller than or equal the last and
+/// second items larger than the last. The first item (the pivot) itself is not part of the
+/// returned slices, but it's placed in correct sorted position between the returned slices.
+///
+/// # Panics
+///
+/// * if `slice` is empty
+fn partition_3way<T: Ord>(slice: &mut [T]) -> (&mut [T], &mut [T]) {
+    // Overall idea here is to look for smaller items on the right and larger
+    // items on the left and swap them. We do that by looking first from the
+    // back/right for the smaller items than pivot and then from the left for
+    // the larger items. If the two halves meet, then all the items must be
+    // partitioned by the pivot. Final step is to move the pivot itselt to the
+    // correct position.
+
+    // use middle element as pivot to not fall to worst case perf for already sorted slices
+    let mid = slice.len() / 2;
+    // swap it to the start so we don't have to deal with cases where the pivot needs to move
+    slice.swap(0, mid);
+
+    let (pivot, rest) = slice.split_first_mut().unwrap();
+
+    let mut left = 0;
+    // number of items that `== pivot` that we have moved to the front of `rest`
+    let mut equals_left = 0_usize;
+    let mut right = rest.len() - 1;
+
+    while &rest[right] > pivot {
+        if right == 0 {
+            // all items on the right are already larger than pivot
+            return (&mut [], &mut slice[1..]);
+        }
+        right -= 1;
+    }
+
+    // If left == right, then right point
+    while left < right {
+        debug_assert!(&rest[right] <= pivot);
+        debug_assert!(right != 0);
+        // Invariants:
+        //  `rest[..left]` is `<= pivot`
+        //   `rest[right+1..]` is `> pivot`
+        //   `rest[right] <= pivot`
+        //
+        // Termination:
+        //   if `left == right` then `rest[..=left] = rest[..=right]` are all `<= pivot`
+        //   and `rest[right+1]` are `> pivot`
+        //   and we have partitioned tha slice
+
+        // find next item that's larger than `pivot`
+        let left_val = &rest[left];
+        #[allow(clippy::comparison_chain)]
+        if left_val < pivot {
+            left += 1;
+        } else if left_val > pivot {
+            // left > pivot, need to be moved
+            rest.swap(left, right);
+            // now `rest[right..]` is `> pivot`
+            // `rest[..=left]` is `<= pivot`
+            // look for the next smaller than `pivot` from the back
+            while &rest[right] > pivot {
+                right -= 1;
+            }
+        } else {
+            // left == pivot
+            // swap with first value on the left that != pivot, first value that is < pivot
+            debug_assert!(equals_left <= left);
+            if left != equals_left {
+                rest.swap(equals_left, left);
+            }
+            equals_left += 1;
+            left += 1;
+        }
+    }
+
+    // now `slice[..=right]` are `<= pivot`, `slice[right+1..]` are `> pivot`
+
+    // swap `pivot` to correct position, `right` points to the last item that's `<= pivot`
+    // swap with it so that left to `pivot` is `<= pivot` and right to pivot is `> pivot`
+    debug_assert!(&rest[right] <= pivot);
+    mem::swap(pivot, &mut rest[right]);
+
+    // swap all items that `== pivot` to the center before pivot
+    // so that we keep all values on the left `< pivot`
+    for i in 0..equals_left {
+        rest.swap(i, right - i - 1);
+    }
+
+    // all the pivots will be at the start of right slice
+    let (a, b) = slice.split_at_mut(right + 1 - equals_left);
+    // exclude all `pivot`s from the returned slices
+    (a, &mut b[equals_left + 1..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +280,15 @@ mod tests {
     fn test_hoare() {
         let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
         quicksort_hoare(&mut arr);
+        assert_sorted(&arr);
+    }
+
+    #[test]
+    //#[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
+    fn test_3way() {
+        let mut arr = vec![1, 4, 2, 24, 65, 3, 3, 45];
+        quicksort_3way(&mut arr);
+        println!("{arr:?}");
         assert_sorted(&arr);
     }
 
@@ -209,6 +328,14 @@ mod tests {
                assert_sorted(&vec);
             }
 
+            #[test]
+            //#[cfg_attr(miri, ignore = "no unsafe code, nothing for miri to check")]
+            fn test_3way(
+                mut vec in proptest::collection::vec(0..10000i32, 0..VEC_SIZE),
+            ) {
+               quicksort_3way(vec.as_mut_slice());
+               assert_sorted(&vec);
+            }
         );
     }
 }
