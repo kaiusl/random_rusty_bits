@@ -3,3 +3,4 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod binary_search_tree;
+pub mod red_black_tree;
