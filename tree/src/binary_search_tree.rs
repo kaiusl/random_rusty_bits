@@ -733,6 +733,7 @@ mod tests {
 
     mod proptests {
         use std::collections::hash_map::RandomState;
+        use std::collections::HashSet;
 
         use proptest::prelude::*;
         use rand::seq::SliceRandom;
@@ -779,6 +780,8 @@ mod tests {
                     bst.insert(*v, *v);
                 }
 
+                let unique = HashSet::<_, RandomState>::from_iter(inserts.into_iter());
+                let mut inserts: Vec<_> = unique.into_iter().collect();
                 inserts.sort();
 
                 let mut items = Vec::with_capacity(bst.len());
