@@ -4,3 +4,5 @@ Cargo.lock
 *.md
 *.ipynb
 .ipynb_checkpoints
+.idea
+.vscode
