@@ -1,7 +1,7 @@
 use core::fmt;
 use std::borrow::Borrow;
 use std::marker::PhantomData;
-use std::mem;
+use std::mem::{self, MaybeUninit};
 use std::ptr::{self, NonNull};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +29,10 @@ impl Color {
 }
 
 struct Node<K, V> {
-    key: K,
-    value: V,
+    // key and value are uninit only for sentinel node which is used by the
+    // delete routine, otherwise they must always be valid values
+    key: MaybeUninit<K>,
+    value: MaybeUninit<V>,
     color: Color,
     parent: Option<RawNode<K, V>>,
     left: Option<RawNode<K, V>>,
@@ -44,14 +46,20 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("Node");
-        f.field("key", &self.key)
-            .field("value", &self.value)
+        f.field("key", unsafe { &self.key.assume_init_ref() })
+            .field("value", unsafe { &self.value.assume_init_ref() })
             .field("color", &self.color);
 
         let mut dbg_opt_node = |name: &str, node: &Option<RawNode<K, V>>| match node {
             Some(node) => {
                 let node = unsafe { node.as_ref() };
-                f.field(name, &(&node.key, &node.value, &node.color));
+                f.field(name, unsafe {
+                    &(
+                        &node.key.assume_init_ref(),
+                        &node.value.assume_init_ref(),
+                        &node.color,
+                    )
+                });
             }
             None => {
                 f.field(name, &None::<K>);
@@ -111,28 +119,28 @@ impl<K, V> RawNode<K, V> {
 
     #[inline]
     unsafe fn key<'a>(&self) -> &'a K {
-        unsafe { &(*self.as_ptr()).key }
+        unsafe { (*self.as_ptr()).key.assume_init_ref() }
     }
 
     #[inline]
     unsafe fn set_key_value(&mut self, key: K, value: V) {
         let ptr = self.as_ptr();
         unsafe {
-            (*ptr).key = key;
-            (*ptr).value = value;
+            (*ptr).key = MaybeUninit::new(key);
+            (*ptr).value = MaybeUninit::new(value);
         }
     }
 
     #[inline]
     unsafe fn as_refs<'a>(&self) -> (&'a K, &'a V) {
         let ptr = self.as_ptr();
-        unsafe { (&(*ptr).key, &(*ptr).value) }
+        unsafe { ((*ptr).key.assume_init_ref(), (*ptr).value.assume_init_ref()) }
     }
 
     #[inline]
     unsafe fn as_muts<'a>(&mut self) -> (&'a K, &'a mut V) {
         let ptr = self.as_ptr();
-        unsafe { (&(*ptr).key, &mut (*ptr).value) }
+        unsafe { ((*ptr).key.assume_init_ref(), (*ptr).value.assume_init_mut()) }
     }
 
     #[inline]
@@ -193,7 +201,7 @@ impl<K, V> RawNode<K, V> {
                     if ptr::eq(ptr, left.as_ptr()) {
                         NodePos::Left
                     } else {
-                        debug_assert!(ptr::eq(ptr, right.as_ptr()));
+                        assert!(ptr::eq(ptr, right.as_ptr()));
                         NodePos::Right
                     }
                 }
@@ -218,12 +226,15 @@ enum NodePos {
 struct RedBlackTree<K, V> {
     root: RawNode<K, V>,
     len: usize,
+    // Sentinel value used by delete routine
+    sentinel: RawNode<K, V>,
     marker: PhantomData<Box<Node<K, V>>>,
 }
 
 impl<K, V> Drop for RedBlackTree<K, V> {
     fn drop(&mut self) {
-        if self.is_empty() {
+        if self.len == 0 {
+            let _: Box<Node<K, V>> = unsafe { Box::from_raw(self.sentinel.as_ptr()) };
             return;
         }
 
@@ -240,7 +251,8 @@ impl<K, V> Drop for RedBlackTree<K, V> {
         }
 
         self.len = 0;
-        unsafe { inner(self.root) }
+        unsafe { inner(self.root) };
+        let _: Box<Node<K, V>> = unsafe { Box::from_raw(self.sentinel.as_ptr()) };
     }
 }
 
@@ -303,6 +315,14 @@ impl<K, V> RedBlackTree<K, V> {
         Self {
             root: RawNode::dangling(),
             len: 0,
+            sentinel: RawNode::from_node(Node {
+                key: MaybeUninit::uninit(),
+                value: MaybeUninit::uninit(),
+                color: Color::Black,
+                parent: None,
+                left: None,
+                right: None,
+            }),
             marker: PhantomData,
         }
     }
@@ -327,7 +347,7 @@ impl<K, V> RedBlackTree<K, V> {
 
         let mut f = |mut node: RawNode<K, V>| {
             let node = unsafe { node.as_mut() };
-            f(&node.key, &mut node.value)
+            unsafe { f(node.key.assume_init_mut(), node.value.assume_init_mut()) }
         };
         unsafe { Self::inorder_for_each_core(self.root, &mut f) }
     }
@@ -372,7 +392,7 @@ impl<K, V> RedBlackTree<K, V> {
 
         let mut x = self.root;
         loop {
-            match key.cmp(unsafe { (*x.as_ptr()).key.borrow() }) {
+            match key.cmp(unsafe { (*x.as_ptr()).key.assume_init_ref().borrow() }) {
                 std::cmp::Ordering::Less => match unsafe { x.left() } {
                     Some(left) => x = left,
                     None => break,
@@ -615,8 +635,8 @@ impl<K, V> RedBlackTree<K, V> {
         K: Eq + Ord,
     {
         let mut new_node = Node {
-            key,
-            value,
+            key: MaybeUninit::new(key),
+            value: MaybeUninit::new(value),
             color: Color::Red,
             parent: None,
             left: None,
@@ -633,10 +653,13 @@ impl<K, V> RedBlackTree<K, V> {
         while let Some(mut node) = maybe_node {
             parent = maybe_node;
             unsafe {
-                match (new_node.key).cmp(node.key()) {
+                match (new_node.key.assume_init_ref()).cmp(node.key()) {
                     std::cmp::Ordering::Less => maybe_node = node.left(),
                     std::cmp::Ordering::Equal => {
-                        node.set_key_value(new_node.key, new_node.value);
+                        node.set_key_value(
+                            new_node.key.assume_init(),
+                            new_node.value.assume_init(),
+                        );
                         return;
                     }
                     std::cmp::Ordering::Greater => maybe_node = node.right(),
@@ -783,8 +806,8 @@ impl<K, V> RedBlackTree<K, V> {
         K: Eq + Ord,
     {
         let mut new_node = Node {
-            key,
-            value,
+            key: MaybeUninit::new(key),
+            value: MaybeUninit::new(value),
             color: Color::Black,
             parent: None,
             left: None,
@@ -801,10 +824,13 @@ impl<K, V> RedBlackTree<K, V> {
         while let Some(mut node) = maybe_node {
             parent = maybe_node;
             unsafe {
-                match (new_node.key).cmp(node.key()) {
+                match (new_node.key.assume_init_ref()).cmp(node.key()) {
                     std::cmp::Ordering::Less => maybe_node = node.left(),
                     std::cmp::Ordering::Equal => {
-                        node.set_key_value(new_node.key, new_node.value);
+                        node.set_key_value(
+                            new_node.key.assume_init(),
+                            new_node.value.assume_init(),
+                        );
                         return;
                     }
                     std::cmp::Ordering::Greater => maybe_node = node.right(),
@@ -832,74 +858,261 @@ impl<K, V> RedBlackTree<K, V> {
         self.len += 1;
     }
 
-    // pub fn delete<Q>(&mut self, key: &Q) -> Option<(K, V)>
-    // where
-    //     K: Borrow<Q>,
-    //     Q: Eq + Ord,
-    // {
-    //     self.get_raw(key).map(|node| self.delete_core(node))
-    // }
+    pub fn delete<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Ord,
+    {
+        self.get_raw(key).map(|node| self.delete_core(node))
+    }
 
-    // fn delete_core(&mut self, node: RawNode<K, V>) -> (K, V) {
-    //     //       +---------- 34 ---------+
-    //     //       |                       |
-    //     // +---- 2 ----+                 58 ----+
-    //     // |           |                        |
-    //     // 1      +--- 9 ----+              +-- 77 --+
-    //     //        |          |              |        |
-    //     //     +- 6       +- 20 -+      +- 71 -+     82
-    //     //     |          |      |      |      |
-    //     //     5         12 -+   24    67      75
-    //     //                   |
-    //     //                   13
+    fn delete_core(&mut self, node: RawNode<K, V>) -> (K, V) {
+        //       +---------- 34 ---------+
+        //       |                       |
+        // +---- 2 ----+                 58 ----+
+        // |           |                        |
+        // 1      +--- 9 ----+              +-- 77 --+
+        //        |          |              |        |
+        //     +- 6       +- 20 -+      +- 71 -+     82
+        //     |          |      |      |      |
+        //     5         12 -+   24    67      75
+        //                   |
+        //                   13
 
-    //     let node_ptr = node.as_ptr();
-    //     match unsafe { (node.left(), node.right()) } {
-    //         (None, v @ Some(_)) | (v @ Some(_), None) | (None, v @ None) => unsafe {
-    //             // `node` has no children or only one.
-    //             // To remove `node` replace `node` with the it's child or `None`.
-    //             // For example remove 1, 6, 12, 58 from tree above
-    //             self.replace_subtree(node, v)
-    //         },
-    //         (Some(_), Some(right)) => unsafe {
-    //             // We want to replace `node` with it's successor, that is the
-    //             // next largest value in the tree. Since the `node` has right
-    //             // child it's successor is the minimum of it's right subtree.
-    //             // (See successor method for more details about it).
-    //             let mut min = self.min_of(right);
-    //             // Now we want to replace `node` with `min`.
-    //             // There are two cases:
-    //             //  a) `min` is the right child of `node`,
-    //             //     in which case we simply replace `node` with `min`
-    //             //     and reconnect `node.left` to `min.left`
-    //             //     for example remove 20, 75, 77 from tree above
-    //             //  b) `min` is not the right child of `node`
-    //             //     in which case we first replace `min` by it's own right child.
-    //             //     Note that `min` cannot have a left child, thus by this replace
-    //             //     we are removing ´min´ from the tree so that we could replace
-    //             //     `node` with `min`
-    //             //     for example remove 9 from tree above, min will be 12
+        unsafe {
+            let mut to_remove = node;
+            let mut to_remove_orig_color = to_remove.color();
+            // Node that replaces the removed node
+            let mut replacement: RawNode<K, V>;
+            match (node.left(), node.right()) {
+                (None, v @ Some(_)) | (v @ Some(_), None) | (None, v @ None) => unsafe {
+                    // `node` has no children or only one.
+                    // To remove `node` replace `node` with the its child or `None`.
+                    // For example remove 1, 6, 12, 58 from tree above
 
-    //             if !ptr::eq(min.as_ptr(), right.as_ptr()) {
-    //                 // b)
-    //                 self.replace_subtree(min, min.right());
-    //                 // min will replace node, so min's right must point to node's right
-    //                 min.set_right(node.right());
-    //                 // atm `min.right.parent` points to the `node`, but it must point to `min`
-    //                 min.right().unwrap().set_parent(Some(min));
-    //             }
-    //             self.replace_subtree(node, Some(min));
-    //             // min replaced node, so min's left must point to node's left
-    //             min.set_left(node.left());
-    //             // atm `min.left.parent` points to the `node`, but it must point to `min`
-    //             min.left().unwrap().set_parent(Some(min));
-    //         },
-    //     }
+                    self.replace_subtree(node, v);
+                    replacement = v.unwrap_or(self.sentinel);
+                    //println!("1");
+                },
+                (Some(_), Some(right)) => {
+                    //println!("2");
+                    // We want to replace `node` with it's successor, that is the
+                    // next largest value in the tree. Since the `node` has right
+                    // child it's successor is the minimum of it's right subtree.
+                    // (See successor method for more details about it).
+                    to_remove = self.min_of(right);
+                    to_remove_orig_color = to_remove.color();
+                    replacement = to_remove.right().unwrap_or(self.sentinel);
 
-    //     let node = unsafe { Box::from_raw(node_ptr) };
-    //     self.len -= 1;
-    //     (node.key, node.value)
-    // }
+                    // Now we want to replace `node` with `min`.
+                    // There are two cases:
+                    //  a) `min` is the right child of `node`,
+                    //     in which case we simply replace `node` with `min`
+                    //     and reconnect `node.left` to `min.left`
+                    //     for example remove 20, 75, 77 from tree above
+                    //  b) `min` is not the right child of `node`
+                    //     in which case we first replace `min` by it's own right child.
+                    //     Note that `min` cannot have a left child, thus by this replace
+                    //     we are removing ´min´ from the tree so that we could replace
+                    //     `node` with `min`
+                    //     for example remove 9 from tree above, min will be 12
+
+                    if ptr::eq(to_remove.as_ptr(), right.as_ptr()) {
+                        replacement.set_parent(Some(to_remove));
+                    } else {
+                        // b)
+                        self.replace_subtree(to_remove, to_remove.right());
+                        //x_parent = Some(y);
+                        // min will replace node, so min's right must point to node's right
+                        to_remove.set_right(node.right());
+                        // atm `min.right.parent` points to the `node`, but it must point to `min`
+                        to_remove.right().unwrap().set_parent(Some(to_remove));
+                    }
+                    self.replace_subtree(node, Some(to_remove));
+                    // min replaced node, so min's left must point to node's left
+                    to_remove.set_left(node.left());
+                    // atm `min.left.parent` points to the `node`, but it must point to `min`
+                    to_remove.left().unwrap().set_parent(Some(to_remove));
+                    to_remove.set_color(node.color());
+                }
+            }
+
+            if to_remove_orig_color.is_black() {
+                self.delete_fixup(replacement);
+            }
+            self.sentinel.set_parent(None);
+            self.sentinel.set_color(Color::Black);
+
+            let node = Box::from_raw(node.as_ptr());
+            self.len -= 1;
+            (node.key.assume_init(), node.value.assume_init())
+        }
+    }
+
+    fn delete_fixup(&mut self, mut x: RawNode<K, V>) {
+        // x points to the place where we removed the node which was black
+        // x itself can be either red (red-black) or black (doubly-black).
+        //
+        // If x is red then we moved one red node up from down the tree and
+        // thus the number of black nodes on subtrees of x didn't change.
+        // But we removed one black node from one of the subtrees of x's parent.
+        // We can simply fix it by coloring x black again.
+        //
+        // If x is black and root then we simply color it black.
+        // If x was not the root we enter the loop ...
+        unsafe {
+            while x.color().is_black() && x.parent().is_some() {
+                // ...
+                // At this point following holds:
+                // * x is not root
+                // * x is doubly black
+                //   This means that "same black height" property holds but we may
+                //   violate "node must be either red or black", "root is black"
+                //   or "red parent has black children" properties.
+                // * x can be self.sentinel or a proper node
+                // * x must have a sibling
+                //   If x == self.sentinel x.parent has one child,
+                //   otherwise parent must have both children.
+                //
+                //   This is because otherwise the black heights from x.parent
+                //   down to the leaves cannot be equal. The shortest black height
+                //   from x.p -> x is 2 if x == self.sentinel. If the sibling is self.sentinel then
+                //   there is no way for the black height from x.p -> x_sibling to equal 2.
+                //   This violates the "same black height" red-black property (which holds) and
+                //   thus x_sibling cannot be self.sentinel.
+                let mut x_parent = x.parent().unwrap();
+                debug_assert!(
+                    x_parent.left().is_some() || x_parent.right().is_some(),
+                    "x.parent should have at least one child"
+                );
+
+                let is_x_sentinel = ptr::eq(x.as_ptr(), self.sentinel.as_ptr());
+                // Note that if is_x_sentinel == true then x.pos() doesn't return the real
+                // position of x but the position of which child the parent has.
+                // So (x.pos() == Right, is_x_sentinel == true) says that x.parent has only a right child.
+                match (x.pos(), is_x_sentinel) {
+                    (NodePos::Root, _) => unreachable!(),
+                    (NodePos::Left, false) | (NodePos::Right, true) => {
+                        // x in the left child and the parent has both children
+                        // or x is sentinel and parent has only a right child
+                        let mut x_sibling = x_parent.right().unwrap();
+                        if cfg!(debug_assertions) {
+                            if is_x_sentinel {
+                                assert!(x_parent.left().is_none());
+                                assert!(x_parent.right().is_some());
+                            } else {
+                                assert!(x_parent.left().is_some());
+                                assert!(x_parent.right().is_some());
+                            }
+                            assert!(
+                                !ptr::eq(x_sibling.as_ptr(), self.sentinel.as_ptr()),
+                                "w should not be a self.null"
+                            );
+                            assert!(
+                                !ptr::eq(x_sibling.as_ptr(), x.as_ptr()),
+                                "w should not be equal to x"
+                            );
+                        }
+
+                        if x_sibling.color().is_red() {
+                            //println!("L: case 1");
+                            x_sibling.set_color(Color::Black);
+                            x_parent.set_color(Color::Red);
+                            self.rotate_left(x_parent);
+                            x_sibling = x_parent.right().unwrap();
+                        }
+
+                        let sibling_left_color =
+                            x_sibling.left().map(|n| n.color()).unwrap_or(Color::Black);
+                        let sibling_right_color =
+                            x_sibling.right().map(|n| n.color()).unwrap_or(Color::Black);
+
+                        if sibling_left_color.is_black() && sibling_right_color.is_black() {
+                            // println!("L: case 2");
+                            x_sibling.set_color(Color::Red);
+                            x = x_parent;
+                        } else {
+                            if sibling_right_color.is_black() {
+                                //println!("L: case 3");
+                                if let Some(mut l) = x_sibling.left() {
+                                    l.set_color(Color::Black);
+                                }
+                                x_sibling.set_color(Color::Red);
+                                self.rotate_right(x_sibling);
+                                x_sibling = x_parent.right().unwrap();
+                            }
+
+                            // println!("L: case 4");
+                            x_sibling.set_color(x_parent.color());
+                            x_parent.set_color(Color::Black);
+                            if let Some(mut r) = x_sibling.right() {
+                                r.set_color(Color::Black);
+                            }
+                            self.rotate_left(x_parent);
+                            x = self.root;
+                        }
+                    }
+                    (NodePos::Left, true) | (NodePos::Right, false) => {
+                        // x is the right child and the parent has both children
+                        // or x is sentinel and parent has only a left child
+
+                        let mut x_sibling = x_parent.left().unwrap();
+                        if cfg!(debug_assertions) {
+                            if is_x_sentinel {
+                                assert!(x_parent.left().is_some());
+                                assert!(x_parent.right().is_none());
+                            } else {
+                                assert!(x_parent.left().is_some());
+                                assert!(x_parent.right().is_some());
+                            }
+
+                            assert!(!ptr::eq(x_sibling.as_ptr(), self.sentinel.as_ptr()));
+                            assert!(!ptr::eq(x_sibling.as_ptr(), x.as_ptr()));
+                        }
+
+                        if x_sibling.color().is_red() {
+                            //println!("R: case 1");
+                            x_sibling.set_color(Color::Black);
+                            x_parent.set_color(Color::Red);
+                            self.rotate_right(x_parent);
+                            x_sibling = x_parent.left().unwrap();
+                        }
+
+                        let sibling_left_color =
+                            x_sibling.left().map(|n| n.color()).unwrap_or(Color::Black);
+                        let sibling_right_color =
+                            x_sibling.right().map(|n| n.color()).unwrap_or(Color::Black);
+
+                        if sibling_left_color.is_black() && sibling_right_color.is_black() {
+                            // println!("R: case 2");
+                            x_sibling.set_color(Color::Red);
+                            x = x_parent;
+                        } else {
+                            if sibling_left_color.is_black() {
+                                // println!("R: case 3");
+                                if let Some(mut r) = x_sibling.right() {
+                                    r.set_color(Color::Black);
+                                }
+                                x_sibling.set_color(Color::Red);
+                                self.rotate_left(x_sibling);
+                                x_sibling = x_parent.left().unwrap();
+                            }
+
+                            // println!("R:case 4");
+                            x_sibling.set_color(x_parent.color());
+                            x_parent.set_color(Color::Black);
+                            if let Some(mut l) = x_sibling.left() {
+                                l.set_color(Color::Black);
+                            }
+                            self.rotate_right(x_parent);
+                            x = self.root;
+                        }
+                    }
+                }
+            }
+            x.set_color(Color::Black);
+        }
+    }
 
     /// Replaces subtree `old` with subtree `new`
     unsafe fn replace_subtree(&mut self, old: RawNode<K, V>, new: Option<RawNode<K, V>>) {
@@ -925,6 +1138,8 @@ impl<K, V> RedBlackTree<K, V> {
             // b)
             if let Some(mut new) = new {
                 new.set_parent(old.parent());
+            } else {
+                self.sentinel.set_parent(old.parent());
             }
         }
     }
@@ -955,7 +1170,7 @@ mod tests {
 
     impl PartialEq<Node<i32, i32>> for TestNode {
         fn eq(&self, other: &Node<i32, i32>) -> bool {
-            if self.key != other.key {
+            if self.key != unsafe { other.key.assume_init() } {
                 return false;
             }
             match (&other.parent, &self.parent_k) {
@@ -1003,13 +1218,15 @@ mod tests {
                     node.left
                         .map(|l| unsafe { l.color() }.is_black())
                         .unwrap_or(true),
-                    "left child of red node must be black"
+                    "left child of red node must be black : {:#?}",
+                    node
                 );
                 assert!(
                     node.right
                         .map(|l| unsafe { l.color() }.is_black())
                         .unwrap_or(true),
-                    "right child of red node must be black"
+                    "right child of red node must be black : {:#?}",
+                    node
                 );
             }
 
@@ -1278,25 +1495,66 @@ mod tests {
         assert_eq!(tree.predecessor(&2), None);
     }
 
-    // #[test]
-    // fn delete() {
-    //     let mut tree = RedBlackTree::new();
-    //     assert_eq!(tree.get(&4), None);
+    #[test]
+    fn delete() {
+        let mut tree = RedBlackTree::new();
+        assert_eq!(tree.get(&4), None);
 
-    //     tree.insert(12, 12);
-    //     tree.insert(5, 5);
-    //     tree.insert(9, 9);
-    //     tree.insert(2, 2);
-    //     tree.insert(18, 18);
-    //     tree.insert(15, 15);
-    //     tree.insert(13, 13);
-    //     tree.insert(17, 17);
-    //     tree.insert(19, 19);
+        tree.insert(12, 12);
+        tree.insert(5, 5);
+        tree.insert(9, 9);
+        tree.insert(2, 2);
+        tree.insert(18, 18);
+        tree.insert(15, 15);
+        tree.insert(13, 13);
+        tree.insert(17, 17);
+        tree.insert(19, 19);
 
-    //     for it in [2, 5, 9, 18, 12, 15, 13, 17, 19] {
-    //         assert_eq!(tree.delete(&it), Some((it, it)));
-    //     }
-    // }
+        for it in [2, 5, 9, 18, 12, 15, 13, 17, 19] {
+            assert_eq!(tree.delete(&it), Some((it, it)));
+            if !tree.is_empty() {
+                assert_red_blackness(unsafe { tree.root.as_ref() });
+            }
+        }
+    }
+
+    #[test]
+    fn delete2() {
+        let mut tree = RedBlackTree::new();
+        assert_eq!(tree.get(&4), None);
+        let inserts = [26, 81, 303, 0];
+        for i in inserts {
+            tree.insert(i, i);
+        }
+
+        for it in [26, 81, 303, 0] {
+            assert_eq!(tree.delete(&it), Some((it, it)));
+            if !tree.is_empty() {
+                assert_red_blackness(unsafe { tree.root.as_ref() });
+            }
+
+            //println!("{tree:#?}");
+        }
+    }
+
+    #[test]
+    fn delete3() {
+        let mut tree = RedBlackTree::new();
+        assert_eq!(tree.get(&4), None);
+        let inserts = [3836, 3865, 4173, 1635, 4585, 8422, 4412, 2624, 2138, 128];
+        for i in inserts {
+            tree.insert(i, i);
+        }
+
+        for it in inserts {
+            //println!("\n= {it} =\n");
+            assert_eq!(tree.delete(&it), Some((it, it)));
+            //println!("{tree:#?}");
+            if !tree.is_empty() {
+                assert_red_blackness(unsafe { tree.root.as_ref() });
+            }
+        }
+    }
 
     mod proptests {
         use std::collections::hash_map::RandomState;
@@ -1395,23 +1653,26 @@ mod tests {
                 }
             }
 
-            // #[test]
-            // fn delete(
-            //     mut inserts in proptest::collection::hash_set(0..10000i32, 0..MAP_SIZE),
-            //     access in proptest::collection::vec(0..10000i32, 0..10)
-            // ) {
-            //     let mut ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
-            //     let mut bst = RedBlackTree::new();
-            //     for v in &inserts {
-            //         bst.insert(*v, *v);
-            //     }
+            #[test]
+            fn delete(
+                mut inserts in proptest::collection::hash_set(0..10000i32, 0..MAP_SIZE),
+                access in proptest::collection::vec(0..10000i32, 0..10)
+            ) {
+                let mut ref_hmap = std::collections::HashMap::<i32, i32, RandomState>::from_iter(inserts.iter().map(|v| (*v, *v)));
+                let mut tree = RedBlackTree::new();
+                for v in &inserts {
+                    tree.insert(*v, *v);
+                }
 
-            //     let mut inserts: Vec<_> = inserts.into_iter().collect();
-            //     inserts.shuffle(&mut thread_rng());
-            //     for key in inserts.iter().chain(access.iter()) {
-            //         assert_eq!(ref_hmap.remove_entry(key), bst.delete(key));
-            //     }
-            // }
+                let mut inserts: Vec<_> = inserts.into_iter().collect();
+                inserts.shuffle(&mut thread_rng());
+                for key in inserts.iter().chain(access.iter()) {
+                    assert_eq!(ref_hmap.remove_entry(key), tree.delete(key));
+                    if !tree.is_empty() {
+                        assert_red_blackness(unsafe { tree.root.as_ref() });
+                    }
+                }
+            }
 
         );
     }
