@@ -867,16 +867,16 @@ impl<K, V> RedBlackTree<K, V> {
     }
 
     fn delete_core(&mut self, node: RawNode<K, V>) -> (K, V) {
-        //       +---------- 34 ---------+
-        //       |                       |
-        // +---- 2 ----+                 58 ----+
-        // |           |                        |
-        // 1      +--- 9 ----+              +-- 77 --+
-        //        |          |              |        |
-        //     +- 6       +- 20 -+      +- 71 -+     82
-        //     |          |      |      |      |
-        //     5         12 -+   24    67      75
-        //                   |
+        //       ┌────────── 34 ─────────┐
+        //       │                       │
+        // ┌──── 2 ────┐                 58 ────┐
+        // │           │                        │
+        // 1      ┌─── 9 ────┐              ┌── 77 ──┐
+        //        │          │              │        │
+        //     ┌─ 6       ┌─ 20 ─┐      ┌─ 71 ─┐     82
+        //     │          │      │      │      │
+        //     5         12 ─┐   24    67      75
+        //                   │
         //                   13
 
         unsafe {
@@ -951,7 +951,7 @@ impl<K, V> RedBlackTree<K, V> {
 
     fn delete_fixup(&mut self, mut x: RawNode<K, V>) {
         // x points to the place where we removed the node which was black
-        // x itself can be either red (red-black) or black (doubly-black).
+        // x itself can be either red or black.
         //
         // If x is red then we moved one red node up from down the tree and
         // thus the number of black nodes on subtrees of x didn't change.
@@ -1016,11 +1016,34 @@ impl<K, V> RedBlackTree<K, V> {
 
                         if x_sibling.color().is_red() {
                             //println!("L: case 1");
+                            //
+                            //     ┌─── p:b ───┐                ┌─── p:r ───┐                    ┌─── s:b ───┐
+                            //     │           │                │           │                    │           │
+                            // ┌─ x:b ─┐   ┌─ s:r ─┐   ──►  ┌─ x:b ─┐   ┌─ s:b ─┐   ──►      ┌─ p:r ─┐      d:b
+                            // │       │   │       │        │       │   │       │            │       │
+                            // a       b  c:b     d:b       a       b  c:b     d:b       ┌─ x:b ─┐  c:b
+                            //                                                           │       │
+                            //                                                           a       b
+                            // As a result turns into case 2, 3 or 4 depending on the color of node c's children.
+                            // We haven't created any more issues but all paths through x still have a missing black node.
+                            // However x has gained a red parent and the cases 2, 3 or 4 below will fix the tree.
+
+                            // Parent must be black because we haven't changed the color of parent and sibling yet
+                            // and thus parent must be black to have a red child.
+                            //
+                            // The sibling must have both children to satisfy the "same black height property".
+                            // The argument goes same as the one above the loop, except if the sibling is red then
+                            // the black nodes must be it's children.
+                            debug_assert!(x_parent.color().is_black());
+                            debug_assert!(x_sibling.left().is_some());
+                            debug_assert!(x_sibling.right().is_some());
                             x_sibling.set_color(Color::Black);
                             x_parent.set_color(Color::Red);
                             self.rotate_left(x_parent);
                             x_sibling = x_parent.right().unwrap();
                         }
+
+                        debug_assert!(x_sibling.color().is_black());
 
                         let sibling_left_color =
                             x_sibling.left().map(|n| n.color()).unwrap_or(Color::Black);
@@ -1029,27 +1052,70 @@ impl<K, V> RedBlackTree<K, V> {
 
                         if sibling_left_color.is_black() && sibling_right_color.is_black() {
                             // println!("L: case 2");
+                            // Take off the extra black from x and x's sibling and put it on x's parent.
+                            // That is move the extra black up the tree until we can totally remove it in next iterations.
+                            //
+                            //     ┌─── p:c ───┐                ┌─── p:c ───┐
+                            //     │           │                │           │
+                            // ┌─ x:b ─┐   ┌─ s:b ─┐   ──►  ┌─ x:b ─┐   ┌─ s:r ─┐
+                            // │       │   │       │        │       │   │       │
+                            // a       b  c:b     d:b       a       b  c:b     d:b
+                            //
+                            // If we came here from case 1 then the loop will terminate (also if the parent was just red)
+                            // because parent is red and thus x will be red at next iteration.
+                            // The issue with red parent having a red child will be fixed after the loop
+                            // by coloring x black.
+                            // After coloring parent black all paths going through x will gain an extra black node
+                            // that was taken away by the remove operations. All paths through node s keep the same number
+                            // of black nodes because we took one away from s but added one to p.
+
                             x_sibling.set_color(Color::Red);
                             x = x_parent;
                         } else {
-                            if sibling_right_color.is_black() {
+                            if sibling_left_color.is_red() {
                                 //println!("L: case 3");
-                                if let Some(mut l) = x_sibling.left() {
-                                    l.set_color(Color::Black);
-                                }
+                                //
+                                //    ┌───── p:c ─────┐                ┌───── p:c ─────┐                ┌─── p:c ───┐
+                                //    │               │                │               │                │           │
+                                // ┌─ x:b ─┐      ┌─ s:b ─┐   ──►  ┌─ x:b ─┐       ┌─ s:r ─┐   ──►  ┌─ x:b ─┐   ┌─ c:b ─┐
+                                // │       │      │       │        │       │       │       │        │       │   │       │
+                                // a       b  ┌─ c:r ─┐  d:b       a       b   ┌─ c:b ─┐   d:b      a       b   e   ┌─ s:r ─┐
+                                //            │       │                        │       │                            │       │
+                                //            e       f                        e       f                            f      d:b
+                                //
+                                // Turns into case 4, all paths to leaves keep the same number of black nodes as was before,
+                                // that is paths through x still have one missing black node compared to other paths.
+
+                                // sibling must have a left child because it is red
+                                x_sibling.left().unwrap().set_color(Color::Black);
                                 x_sibling.set_color(Color::Red);
                                 self.rotate_right(x_sibling);
                                 x_sibling = x_parent.right().unwrap();
                             }
 
                             // println!("L: case 4");
+                            //
+                            //     ┌─── p:c ───┐                ┌─── p:b ───┐                     ┌── s:c ──┐
+                            //     │           │                │           │                     │         │
+                            // ┌─ x:b ─┐   ┌─ s:b ─┐   ──►  ┌─ x:b ─┐   ┌─ s:c ─┐   ──►       ┌─ p:b ─┐    d:b
+                            // │       │   │       │        │       │   │       │             │       │
+                            // a       b  c:b     d:r       a       b  c:b     d:b       ┌─ x:b ─┐   c:b
+                            //                                                           │       │
+                            //                                                           a       b
+                            //
+                            // This will terminate the loop because the root of the tree is the same color as it was,
+                            // (so it must match with red-black tree properties)
+                            // but x has an extra black ancestor (either p became black or s was added as black grandparent).
+                            // Thus the paths going through x have gained one extra black node which was missing.
+                            // The lost black on paths through d is accounted by recoloring d black. All other path
+                            // keep the number of black nodes.
+
                             x_sibling.set_color(x_parent.color());
                             x_parent.set_color(Color::Black);
-                            if let Some(mut r) = x_sibling.right() {
-                                r.set_color(Color::Black);
-                            }
+                            // sibling must have a right child because it is red
+                            x_sibling.right().unwrap().set_color(Color::Black);
                             self.rotate_left(x_parent);
-                            x = self.root;
+                            break;
                         }
                     }
                     (NodePos::Left, true) | (NodePos::Right, false) => {
@@ -1090,9 +1156,7 @@ impl<K, V> RedBlackTree<K, V> {
                         } else {
                             if sibling_left_color.is_black() {
                                 // println!("R: case 3");
-                                if let Some(mut r) = x_sibling.right() {
-                                    r.set_color(Color::Black);
-                                }
+                                x_sibling.right().unwrap().set_color(Color::Black);
                                 x_sibling.set_color(Color::Red);
                                 self.rotate_left(x_sibling);
                                 x_sibling = x_parent.left().unwrap();
@@ -1101,11 +1165,9 @@ impl<K, V> RedBlackTree<K, V> {
                             // println!("R:case 4");
                             x_sibling.set_color(x_parent.color());
                             x_parent.set_color(Color::Black);
-                            if let Some(mut l) = x_sibling.left() {
-                                l.set_color(Color::Black);
-                            }
+                            x_sibling.left().unwrap().set_color(Color::Black);
                             self.rotate_right(x_parent);
-                            x = self.root;
+                            break;
                         }
                     }
                 }
