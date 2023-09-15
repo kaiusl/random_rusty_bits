@@ -613,9 +613,13 @@ mod tests {
             #[cfg_attr(miri, ignore = "nothing for miri to really check, no need to waste time")]
             fn with_cap(cap in 0..100_000usize, lf in 0.5..0.999) {
                 let map = HashMap::<u8, ()>::with_capacity_and_load_factor(cap, lf);
-                let will_be_lf = cap as f64/map.cap as f64;
-                assert!(will_be_lf < lf);
-                assert!(map.cap.is_power_of_two());
+                if cap > 0 {
+                    let will_be_lf = cap as f64/map.cap as f64;
+                    assert!(will_be_lf < lf);
+                    assert!(map.cap.is_power_of_two());
+                } else {
+                    assert_eq!(map.cap, 0);
+                }
             }
         );
     }
