@@ -457,16 +457,16 @@ impl<K, V> RedBlackTree<K, V> {
     where
         K: Eq,
     {
-        //       +---------- 34 ---------+
-        //       |                       |
-        // +---- 2 ----+                 58 ----+
-        // |           |                        |
-        // 1      +--- 9 ----+              +-- 77 --+
-        //        |          |              |        |
-        //     +- 6       +- 20 -+      +- 71 -+     82
-        //     |          |      |      |      |
-        //     5         12 -+   24    67      75
-        //                   |
+        //       ┌────────── 34 ─────────┐
+        //       │                       │
+        // ┌──── 2 ────┐                 58 ────┐
+        // │           │                        │
+        // 1      ┌─── 9 ────┐              ┌── 77 ──┐
+        //        │          │              │        │
+        //     ┌─ 6       ┌─ 20 ─┐      ┌─ 71 ─┐     82
+        //     │          │      │      │      │
+        //     5         12 ─┐   24    67      75
+        //                   │
         //                   13
 
         match unsafe { node.right() } {
@@ -526,17 +526,18 @@ impl<K, V> RedBlackTree<K, V> {
     where
         K: Eq,
     {
-        //       +---------- 34 ---------+
-        //       |                       |
-        // +---- 2 ----+                 58 ----+
-        // |           |                        |
-        // 1      +--- 9 ----+              +-- 77 --+
-        //        |          |              |        |
-        //     +- 6       +- 20 -+      +- 71 -+     82
-        //     |          |      |      |      |
-        //     5         12 -+   24    67      75
-        //                   |
+        //       ┌────────── 34 ─────────┐
+        //       │                       │
+        // ┌──── 2 ────┐                 58 ────┐
+        // │           │                        │
+        // 1      ┌─── 9 ────┐              ┌── 77 ──┐
+        //        │          │              │        │
+        //     ┌─ 6       ┌─ 20 ─┐      ┌─ 71 ─┐     82
+        //     │          │      │      │      │
+        //     5         12 ─┐   24    67      75
+        //                   │
         //                   13
+
         match unsafe { node.left() } {
             // 2 -> 1, 9 -> 6, 20 -> 13, 77 -> 75
             Some(left) => unsafe { Some(self.max_of(left)) },
@@ -562,13 +563,13 @@ impl<K, V> RedBlackTree<K, V> {
     }
 
     fn rotate_left(&mut self, mut node: RawNode<K, V>) {
-        //    p                       p
-        //    |                       |
-        // +-node-+               +-right-+
-        // |      |      -->      |       |
-        // a  +-right-+       +-node-+    c
-        //    |       |       |      |
-        //    b       c       a      b
+        //    p                   p
+        //    │                   │
+        // ┌─ n ─┐             ┌─ r ─┐
+        // │     │     ──►     │     │
+        // a  ┌─ r ─┐       ┌─ n ─┐  c
+        //    │     │       │     │
+        //    b     c       a     b
         // where a, b, c can be any subtrees
         unsafe {
             if let Some(mut right) = node.right() {
@@ -596,13 +597,13 @@ impl<K, V> RedBlackTree<K, V> {
     }
 
     fn rotate_right(&mut self, mut node: RawNode<K, V>) {
-        //         p              p
-        //         |              |
-        //     +-node-+       +-left-+
-        //     |      |       |      |
-        // +-left-+   c  -->  a  +-node-+
-        // |      |              |      |
-        // a      b              b      c
+        //       p             p
+        //       |             |
+        //    ┌─ n ─┐       ┌─ l ─┐
+        //    │     │  ──►  │     │
+        // ┌─ l ─┐  c       a  ┌─ n ─┐
+        // │     │             │     │
+        // a     b             b     c
         // where a, b, c can be any subtrees
 
         unsafe {
@@ -713,11 +714,11 @@ impl<K, V> RedBlackTree<K, V> {
 
                                 match uncle {
                                     Some(mut uncle) if uncle.color().is_red() => {
-                                        //     +--- gp:b ---+               +--- gp:r ---+
-                                        //     |            |               |            |
-                                        //  + p:r +      + u:r +   -->   + p:b +      + u:b +
-                                        //  |     |      |     |         |     |      |     |
-                                        // n:r   a:b    b:b   c:b       n:r   a:b    b:b   c:b
+                                        //      ┌──── gp:b ───┐                 ┌─── gp:r ───┐
+                                        //      │             │                 │            │
+                                        //  ┌─ p:r ─┐     ┌─ u:r ─┐   ──►   ┌─ p:b ─┐    ┌─ u:b ─┐
+                                        //  │       │     │       │         │       │    │       │
+                                        // n:r     a:b   b:b     c:b       n:r     a:b  b:b     c:b
                                         // (a, b, c can be any subtrees)
                                         //
                                         // at first thought we could color new node `n` black but that would
@@ -734,12 +735,12 @@ impl<K, V> RedBlackTree<K, V> {
                                     }
                                     _ => {
                                         if let NodePos::Right = node.pos() {
-                                            //       +-- gp:b --+                 +-- gp:b --+
-                                            //       |          |                 |          |
-                                            //  +-- p:r --+    u:b  -->       +- n:r --+    u:b
-                                            //  |         |                   |        |
-                                            // a:b    +- n:r -+           +- p:r -+   c:b
-                                            //        |       |           |       |
+                                            //       ┌── gp:b ──┐                 ┌── gp:b ──┐
+                                            //       │          │                 │          │
+                                            //  ┌── p:r ──┐    u:b  ──►       ┌─ n:r ──┐    u:b
+                                            //  │         │                   │        │
+                                            // a:b    ┌─ n:r ─┐           ┌─ p:r ─┐   c:b
+                                            //        │       │           │       │
                                             //       b:b     c:b         a:b     b:b
                                             // (a, b, c, u can be any subtrees)
                                             //
@@ -748,12 +749,12 @@ impl<K, V> RedBlackTree<K, V> {
                                             mem::swap(&mut parent, &mut node);
                                         }
 
-                                        //           +-- gp:b --+            +----- p:b -----+
-                                        //           |          |            |               |
-                                        //      +-- p:r --+    u:b  -->   +- n:r -+     +- gp:r -+
-                                        //      |         |               |       |     |        |
-                                        //  +- n:r -+    c:b             a:b     b:b   c:b      u:b
-                                        //  |       |
+                                        //           ┌── gp:b ──┐            ┌───── p:b ─────┐
+                                        //           │          │            │               │
+                                        //      ┌── p:r ──┐    u:b  ──►   ┌─ n:r ─┐     ┌─ gp:r ─┐
+                                        //      │         │               │       │     │        │
+                                        //  ┌─ n:r ─┐    c:b             a:b     b:b   c:b      u:b
+                                        //  │       │
                                         // a:b     b:b
                                         //
                                         // (a, b, c, u can be any subtrees)
@@ -1075,7 +1076,7 @@ impl<K, V> RedBlackTree<K, V> {
                             if sibling_left_color.is_red() {
                                 //println!("L: case 3");
                                 //
-                                //    ┌───── p:c ─────┐                ┌───── p:c ─────┐                ┌─── p:c ───┐
+                                //    ╭───── p:c ─────┐                ┌───── p:c ─────┐                ┌─── p:c ───┐
                                 //    │               │                │               │                │           │
                                 // ┌─ x:b ─┐      ┌─ s:b ─┐   ──►  ┌─ x:b ─┐       ┌─ s:r ─┐   ──►  ┌─ x:b ─┐   ┌─ c:b ─┐
                                 // │       │      │       │        │       │       │       │        │       │   │       │
