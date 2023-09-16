@@ -1,3 +1,6 @@
+// TODO: remove massive unsafe blocks
+// TODO: add safety comments
+
 use core::fmt;
 use std::borrow::Borrow;
 use std::marker::PhantomData;
@@ -690,115 +693,132 @@ impl<K, V> RedBlackTree<K, V> {
     fn insert_fixup(&mut self, new_node: RawNode<K, V>) {
         let mut node = new_node;
         unsafe {
-            loop {
-                match node.parent() {
-                    Some(mut parent) if parent.color().is_red() => {
-                        debug_assert!(node.color().is_red());
-                        // red-black properties are violated because red parent has a red child
-                        //
-                        // Note that there is only one violation at this point.
-                        // At first iteration it's the new_node and it's parent.
-                        // If we take the "red uncle" branch then at next iteration it will be
-                        // the grand_parent and it's parent that violate the red-black properties.
-                        // If we take the other branch, there will be no more iterations as that
-                        // will result in a black parent.
-
-                        match parent.pos() {
-                            NodePos::Root => unreachable!(),
-                            NodePos::Left => {
-                                // grand_parent must exist because parent is red and
-                                // thus not root as root is always black
-                                let mut grand_parent = parent.parent().unwrap();
-                                let uncle = grand_parent.right();
-                                debug_assert!(grand_parent.color().is_black());
-
-                                match uncle {
-                                    Some(mut uncle) if uncle.color().is_red() => {
-                                        //      ┌──── gp:b ───┐                 ┌─── gp:r ───┐
-                                        //      │             │                 │            │
-                                        //  ┌─ p:r ─┐     ┌─ u:r ─┐   ──►   ┌─ p:b ─┐    ┌─ u:b ─┐
-                                        //  │       │     │       │         │       │    │       │
-                                        // n:r     a:b   b:b     c:b       n:r     a:b  b:b     c:b
-                                        // (a, b, c can be any subtrees)
-                                        //
-                                        // at first thought we could color new node `n` black but that would
-                                        // increase the black height by one on that leaf but not on other leaves
-                                        // which is again in violation to red-black properties.
-                                        // Instead color parent and uncle black and grandparent red, which keeps
-                                        // the black height unchanged.
-                                        // Now the grand parent may also have a red parent, but we can simply
-                                        // repeat the process as if the grand parent was the new added node.
-                                        parent.set_color(Color::Black);
-                                        uncle.set_color(Color::Black);
-                                        grand_parent.set_color(Color::Red);
-                                        node = grand_parent;
-                                    }
-                                    _ => {
-                                        if let NodePos::Right = node.pos() {
-                                            //       ┌── gp:b ──┐                 ┌── gp:b ──┐
-                                            //       │          │                 │          │
-                                            //  ┌── p:r ──┐    u:b  ──►       ┌─ n:r ──┐    u:b
-                                            //  │         │                   │        │
-                                            // a:b    ┌─ n:r ─┐           ┌─ p:r ─┐   c:b
-                                            //        │       │           │       │
-                                            //       b:b     c:b         a:b     b:b
-                                            // (a, b, c, u can be any subtrees)
-                                            //
-                                            // left rotate parent and swap node and parent pointers so we match the case below
-                                            self.rotate_left(parent);
-                                            mem::swap(&mut parent, &mut node);
-                                        }
-
-                                        //           ┌── gp:b ──┐            ┌───── p:b ─────┐
-                                        //           │          │            │               │
-                                        //      ┌── p:r ──┐    u:b  ──►   ┌─ n:r ─┐     ┌─ gp:r ─┐
-                                        //      │         │               │       │     │        │
-                                        //  ┌─ n:r ─┐    c:b             a:b     b:b   c:b      u:b
-                                        //  │       │
-                                        // a:b     b:b
-                                        //
-                                        // (a, b, c, u can be any subtrees)
-                                        //
-                                        // Note that this will fix the one violation we had and thus the whole tree
-                                        // is again a proper red-black tree.
-
-                                        parent.set_color(Color::Black);
-                                        grand_parent.set_color(Color::Red);
-                                        self.rotate_right(grand_parent);
-                                    }
-                                }
-                            }
-                            NodePos::Right => {
-                                // same as Left branch but left/right are switched
-                                let mut grand_parent = parent.parent().unwrap();
-                                let uncle = grand_parent.left();
-
-                                match uncle {
-                                    Some(mut uncle) if uncle.color().is_red() => {
-                                        parent.set_color(Color::Black);
-                                        uncle.set_color(Color::Black);
-                                        grand_parent.set_color(Color::Red);
-                                        node = grand_parent;
-                                    }
-                                    _ => {
-                                        if let NodePos::Left = node.pos() {
-                                            self.rotate_right(parent);
-                                            mem::swap(&mut parent, &mut node);
-                                        }
-
-                                        parent.set_color(Color::Black);
-                                        grand_parent.set_color(Color::Red);
-                                        self.rotate_left(grand_parent);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => break,
+            while let Some(parent) = node.parent() {
+                if parent.color().is_black() {
+                    break;
                 }
+
+                debug_assert!(node.color().is_red());
+                node = self.insert_fixup_core(parent, node);
             }
 
             self.root.set_color(Color::Black);
+        }
+    }
+
+    /// Fixes red parent having a red child.
+    ///
+    /// Returns a new node which may violate this property.
+    unsafe fn insert_fixup_core(
+        &mut self,
+        mut parent: RawNode<K, V>,
+        mut child: RawNode<K, V>,
+    ) -> RawNode<K, V> {
+        unsafe {
+            debug_assert!(child.color().is_red());
+            debug_assert!(parent.color().is_red());
+
+            // red-black properties are violated because red parent has a red child
+            //
+            // Note that there is only one violation at this point.
+            // At first iteration it's the new_node and it's parent.
+            // If we take the "red uncle" branch then at next iteration it will be
+            // the grand_parent and it's parent that violate the red-black properties.
+            // If we take the other branch, there will be no more iterations as that
+            // will result in a black parent.
+
+            match parent.pos() {
+                NodePos::Root => unreachable!(),
+                NodePos::Left => {
+                    // grand_parent must exist because parent is red and
+                    // thus not root as root is always black
+                    let mut grand_parent = parent.parent().unwrap();
+                    let uncle = grand_parent.right();
+                    debug_assert!(grand_parent.color().is_black());
+
+                    match uncle {
+                        Some(mut uncle) if uncle.color().is_red() => {
+                            //      ┌──── gp:b ───┐                 ┌─── gp:r ───┐
+                            //      │             │                 │            │
+                            //  ┌─ p:r ─┐     ┌─ u:r ─┐   ──►   ┌─ p:b ─┐    ┌─ u:b ─┐
+                            //  │       │     │       │         │       │    │       │
+                            // c:r     1:b   2:b     3:b       c:r     1:b  2:b     3:b
+                            // (1, 2, 3 can be any subtrees)
+                            //
+                            // at first thought we could color new node `n` black but that would
+                            // increase the black height by one on that leaf but not on other leaves
+                            // which is again in violation to red-black properties.
+                            // Instead color parent and uncle black and grandparent red, which keeps
+                            // the black height unchanged.
+                            // Now the grand parent may also have a red parent, but we can simply
+                            // repeat the process as if the grand parent was the new added node.
+                            parent.set_color(Color::Black);
+                            uncle.set_color(Color::Black);
+                            grand_parent.set_color(Color::Red);
+                            grand_parent
+                        }
+                        _ => {
+                            if let NodePos::Right = child.pos() {
+                                //       ┌── gp:b ──┐                 ┌── gp:b ──┐
+                                //       │          │                 │          │
+                                //  ┌── p:r ──┐    u:b  ──►       ┌─ c:r ──┐    u:b
+                                //  │         │                   │        │
+                                // 1:b    ┌─ c:r ─┐           ┌─ p:r ─┐   3:b
+                                //        │       │           │       │
+                                //       2:b     3:b         1:b     2:b
+                                // (1, 2, 3, u can be any subtrees)
+                                //
+                                // left rotate parent and swap node and parent pointers so we match the case below
+                                self.rotate_left(parent);
+                                mem::swap(&mut parent, &mut child);
+                            }
+
+                            //           ┌── gp:b ──┐            ┌───── p:b ─────┐
+                            //           │          │            │               │
+                            //      ┌── p:r ──┐    u:b  ──►   ┌─ c:r ─┐     ┌─ gp:r ─┐
+                            //      │         │               │       │     │        │
+                            //  ┌─ c:r ─┐    3:b             1:b     2:b   3:b      u:b
+                            //  │       │
+                            // 1:b     2:b
+                            //
+                            // (1, 2, 3, u can be any subtrees)
+                            //
+                            // Note that this will fix the one violation we had and thus the whole tree
+                            // is again a proper red-black tree.
+
+                            parent.set_color(Color::Black);
+                            grand_parent.set_color(Color::Red);
+                            self.rotate_right(grand_parent);
+                            child
+                        }
+                    }
+                }
+                NodePos::Right => {
+                    // same as Left branch but left/right are switched
+                    let mut grand_parent = parent.parent().unwrap();
+                    let uncle = grand_parent.left();
+
+                    match uncle {
+                        Some(mut uncle) if uncle.color().is_red() => {
+                            parent.set_color(Color::Black);
+                            uncle.set_color(Color::Black);
+                            grand_parent.set_color(Color::Red);
+                            grand_parent
+                        }
+                        _ => {
+                            if let NodePos::Left = child.pos() {
+                                self.rotate_right(parent);
+                                mem::swap(&mut parent, &mut child);
+                            }
+
+                            parent.set_color(Color::Black);
+                            grand_parent.set_color(Color::Red);
+                            self.rotate_left(grand_parent);
+                            child
+                        }
+                    }
+                }
+            }
         }
     }
 
