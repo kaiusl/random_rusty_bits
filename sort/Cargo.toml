@@ -2,18 +2,17 @@
 name = "sort"
 version = "0.1.0"
 edition = "2021"
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 
 [dev-dependencies]
-proptest = "1.2.0"
 criterion = "0.5.1"
-rand = "0.8.5"
-rand_chacha = "0.3.1"
 criterion-perf-events = "0.4"
 perfcnt = "0.8.0"
+proptest = "1.2.0"
+rand = "0.8.5"
+rand_chacha = "0.3.1"
 
 [[bench]]
 name = "bench"
